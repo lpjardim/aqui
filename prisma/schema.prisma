@@ -1,0 +1,89 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  IN_REVIEW
+  ACTIVE
+  COMPLETED
+  REJECTED
+  REFUNDED
+}
+
+model User {
+  id          String   @id @default(cuid())
+  name        String
+  email       String   @unique
+  phone       String
+  companyName String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  orders     Order[]
+  loginToken LoginToken[]
+}
+
+model Order {
+  id                      String      @id @default(cuid())
+  userId                  String
+  visualizationsPurchased Int
+  visualizationsDelivered Int         @default(0)
+  zone                    String
+  price                   Int
+  stripeSessionId         String?     @unique
+  stripePaymentIntentId   String?
+  status                  OrderStatus @default(PENDING_PAYMENT)
+  proofUrl                String?
+  createdAt               DateTime    @default(now())
+  updatedAt               DateTime    @updatedAt
+
+  user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assets  Asset[]
+  updates CampaignUpdate[]
+
+  @@index([userId])
+  @@index([status])
+}
+
+model Asset {
+  id        String   @id @default(cuid())
+  orderId   String
+  fileUrl   String
+  fileType  String
+  createdAt DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model CampaignUpdate {
+  id                      String   @id @default(cuid())
+  orderId                 String
+  visualizationsDelivered Int
+  createdAt               DateTime @default(now())
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+}
+
+model LoginToken {
+  id        String    @id @default(cuid())
+  userId    String
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}

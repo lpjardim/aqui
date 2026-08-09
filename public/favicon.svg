@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" fill="#ffffff"/>
+  <path d="M8 8h14v5H13v9H8z" fill="#f90101"/>
+  <path d="M56 56H42v-5h9v-9h5z" fill="#f90101"/>
+  <text x="30" y="43" font-family="Helvetica, Arial, sans-serif" font-size="30" font-weight="800" text-anchor="middle" fill="#000000" letter-spacing="-2">A</text>
+  <circle cx="45" cy="40" r="4" fill="#f90101"/>
+</svg>
