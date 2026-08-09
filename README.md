@@ -61,8 +61,10 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 `src/lib/storage` expõe um `StorageDriver` com `put`, `remove` e `read`. Existem dois drivers:
 
 - `local` — grava em `./storage` e serve através de `/api/ficheiros/...`
-- `vercel-blob` — o browser envia o ficheiro directamente para o Blob (`/api/uploads/token`),
-  o que evita o limite de tamanho dos pedidos serverless
+- `vercel-blob` — o browser envia o ficheiro directamente para o Blob (client upload,
+  `/api/blob/upload` só emite o token), sem passar pelo body de uma função Vercel. O
+  Blob Store fica `private`; o admin só consegue ver os ficheiros através de
+  `/api/admin/ficheiros`, que autentica antes de servir o conteúdo
 
 Trocar de fornecedor (Cloudflare R2, S3, …) é implementar a mesma interface e registá-lo em
 `src/lib/storage/index.ts`.

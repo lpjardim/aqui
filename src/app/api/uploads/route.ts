@@ -29,5 +29,5 @@ export async function POST(request: Request) {
     contentType: file.type,
   });
 
-  return NextResponse.json({ url: stored.url, fileType: file.type });
+  return NextResponse.json({ url: stored.url, pathname: stored.key, fileType: file.type });
 }

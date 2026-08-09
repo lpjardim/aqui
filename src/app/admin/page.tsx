@@ -83,17 +83,24 @@ export default async function AdminPage() {
 
             {order.assets.length > 0 && (
               <div className="mt-5 flex flex-wrap gap-2">
-                {order.assets.map((asset, index) => (
-                  <a
-                    key={asset.id}
-                    href={asset.fileUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="rounded-sm border border-line px-3 py-1.5 text-[12px] transition-colors hover:bg-surface"
-                  >
-                    Ficheiro {index + 1} · {asset.fileType.split("/")[1]}
-                  </a>
-                ))}
+                {order.assets.map((asset, index) => {
+                  // Assets no Blob (STORAGE_DRIVER="vercel-blob") são privados: o link
+                  // passa pela rota de admin, que autentica antes de servir o ficheiro.
+                  const href = asset.fileUrl.startsWith("http")
+                    ? `/api/admin/ficheiros?url=${encodeURIComponent(asset.fileUrl)}`
+                    : asset.fileUrl;
+                  return (
+                    <a
+                      key={asset.id}
+                      href={href}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="rounded-sm border border-line px-3 py-1.5 text-[12px] transition-colors hover:bg-surface"
+                    >
+                      Ficheiro {index + 1} · {asset.fileType.split("/")[1]}
+                    </a>
+                  );
+                })}
               </div>
             )}
 

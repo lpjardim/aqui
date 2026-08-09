@@ -6,17 +6,30 @@ import { Button } from "@/components/ui/button";
 import { PACKS, getPack, type PackId } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { NATIONAL_ZONE, ZONES } from "@/lib/zones";
-import { ACCEPT_ATTRIBUTE, MAX_ASSETS } from "@/lib/assets";
+import {
+  ACCEPT_ATTRIBUTE,
+  MAX_ASSETS,
+  MAX_FILE_SIZE,
+  MAX_FILE_SIZE_MB,
+  buildAssetPathname,
+  isAcceptedMimeType,
+} from "@/lib/assets";
 import { track } from "@/lib/analytics";
 
 const TOTAL_STEPS = 5;
 
-type UploadedAsset = {
+type AssetStatus = "uploading" | "done" | "error";
+
+type AssetItem = {
   id: string;
-  name: string;
-  url: string;
-  fileType: string;
+  file: File;
   previewUrl: string;
+  fileType: string;
+  status: AssetStatus;
+  progress: number;
+  error?: string;
+  url?: string;
+  pathname?: string;
 };
 
 const STEP_TITLES = [
@@ -27,83 +40,160 @@ const STEP_TITLES = [
   "Resumo",
 ];
 
-async function uploadFile(file: File): Promise<{ url: string; fileType: string }> {
+/**
+ * `position` é o número de ordem deste ficheiro dentro do pedido (1..MAX_ASSETS).
+ * É enviado ao `handleUpload` como validação adicional do lado do servidor.
+ */
+async function uploadFile(
+  file: File,
+  position: number,
+  onProgress: (percentage: number) => void,
+  signal: AbortSignal,
+): Promise<{ url: string; pathname: string }> {
   if (process.env.NEXT_PUBLIC_STORAGE_DRIVER === "vercel-blob") {
     const { upload } = await import("@vercel/blob/client");
-    const blob = await upload(file.name, file, {
-      access: "public",
-      handleUploadUrl: "/api/uploads/token",
+    const pathname = buildAssetPathname(file.type);
+
+    // O ficheiro vai directamente do browser para o Blob Store (privado);
+    // nunca passa pelo body desta função Vercel.
+    const blob = await upload(pathname, file, {
+      access: "private",
+      handleUploadUrl: "/api/blob/upload",
       contentType: file.type,
+      clientPayload: JSON.stringify({ count: position }),
+      abortSignal: signal,
+      onUploadProgress: ({ percentage }) => onProgress(Math.round(percentage)),
     });
-    return { url: blob.url, fileType: file.type };
+
+    return { url: blob.url, pathname: blob.pathname };
   }
 
   const body = new FormData();
   body.append("file", file);
 
-  const response = await fetch("/api/uploads", { method: "POST", body });
+  const response = await fetch("/api/uploads", { method: "POST", body, signal });
   const data = await response.json();
 
   if (!response.ok) {
     throw new Error(data.error ?? "Falha no upload.");
   }
 
-  return data as { url: string; fileType: string };
+  onProgress(100);
+  return { url: data.url as string, pathname: (data.pathname as string | undefined) ?? "" };
 }
 
 export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
   const [step, setStep] = useState(1);
   const [zone, setZone] = useState("");
-  const [assets, setAssets] = useState<UploadedAsset[]>([]);
+  const [assets, setAssets] = useState<AssetItem[]>([]);
   const [packId, setPackId] = useState<PackId | null>(initialPack);
   const [contact, setContact] = useState({ name: "", companyName: "", email: "", phone: "" });
 
-  const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortControllers = useRef(new Map<string, AbortController>());
   const pack = useMemo(() => getPack(packId), [packId]);
 
+  const doneAssets = useMemo(() => assets.filter((asset) => asset.status === "done"), [assets]);
+  const hasPendingUploads = useMemo(
+    () => assets.some((asset) => asset.status === "uploading"),
+    [assets],
+  );
+
+  const runUpload = useCallback((item: AssetItem, position: number) => {
+    const controller = new AbortController();
+    abortControllers.current.set(item.id, controller);
+
+    uploadFile(
+      item.file,
+      position,
+      (percentage) => {
+        setAssets((current) =>
+          current.map((asset) => (asset.id === item.id ? { ...asset, progress: percentage } : asset)),
+        );
+      },
+      controller.signal,
+    )
+      .then(({ url, pathname }) => {
+        setAssets((current) =>
+          current.map((asset) =>
+            asset.id === item.id
+              ? { ...asset, status: "done", progress: 100, url, pathname }
+              : asset,
+          ),
+        );
+      })
+      .catch((uploadError) => {
+        if (controller.signal.aborted) return;
+        setAssets((current) =>
+          current.map((asset) =>
+            asset.id === item.id
+              ? {
+                  ...asset,
+                  status: "error",
+                  error: uploadError instanceof Error ? uploadError.message : "Falha no upload.",
+                }
+              : asset,
+          ),
+        );
+      })
+      .finally(() => {
+        abortControllers.current.delete(item.id);
+      });
+  }, []);
+
   const handleFiles = useCallback(
-    async (fileList: FileList | null) => {
+    (fileList: FileList | null) => {
       if (!fileList?.length) return;
       setError(null);
 
       const room = MAX_ASSETS - assets.length;
-      const files = Array.from(fileList).slice(0, room);
+      const incoming = Array.from(fileList).slice(0, room);
 
-      if (files.length === 0) {
+      if (incoming.length === 0) {
         setError(`Pode enviar no máximo ${MAX_ASSETS} ficheiros.`);
+        if (inputRef.current) inputRef.current.value = "";
         return;
       }
 
-      setUploading(true);
-      try {
-        for (const file of files) {
-          const { url, fileType } = await uploadFile(file);
-          setAssets((current) => [
-            ...current,
-            {
-              id: `${file.name}-${Date.now()}-${Math.random()}`,
-              name: file.name,
-              url,
-              fileType,
-              previewUrl: URL.createObjectURL(file),
-            },
-          ]);
-        }
-      } catch (uploadError) {
-        setError(uploadError instanceof Error ? uploadError.message : "Falha no upload.");
-      } finally {
-        setUploading(false);
+      const invalidType = incoming.find((file) => !isAcceptedMimeType(file.type));
+      if (invalidType) {
+        setError(`"${invalidType.name}" não é um formato aceite. Use JPG, PNG, WEBP ou MP4.`);
         if (inputRef.current) inputRef.current.value = "";
+        return;
       }
+
+      const tooLarge = incoming.find((file) => file.size > MAX_FILE_SIZE);
+      if (tooLarge) {
+        setError(`"${tooLarge.name}" é demasiado grande (máximo ${MAX_FILE_SIZE_MB} MB).`);
+        if (inputRef.current) inputRef.current.value = "";
+        return;
+      }
+
+      const startPosition = assets.length;
+      const items: AssetItem[] = incoming.map((file) => ({
+        id: `${Date.now()}-${Math.random()}`,
+        file,
+        previewUrl: URL.createObjectURL(file),
+        fileType: file.type,
+        status: "uploading",
+        progress: 0,
+      }));
+
+      setAssets((current) => [...current, ...items]);
+      items.forEach((item, index) => runUpload(item, startPosition + index + 1));
+
+      if (inputRef.current) inputRef.current.value = "";
     },
-    [assets.length],
+    [assets.length, runUpload],
   );
 
   function removeAsset(id: string) {
+    abortControllers.current.get(id)?.abort();
+    abortControllers.current.delete(id);
+
     setAssets((current) => {
       const target = current.find((asset) => asset.id === id);
       if (target) URL.revokeObjectURL(target.previewUrl);
@@ -111,9 +201,22 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
     });
   }
 
+  function retryAsset(id: string) {
+    const target = assets.find((asset) => asset.id === id);
+    if (!target) return;
+
+    setAssets((current) =>
+      current.map((asset) =>
+        asset.id === id ? { ...asset, status: "uploading", progress: 0, error: undefined } : asset,
+      ),
+    );
+    runUpload(target, assets.indexOf(target) + 1);
+  }
+
   function validateStep(): string | null {
     if (step === 1 && !zone) return "Escolha a zona onde quer aparecer.";
-    if (step === 2 && assets.length === 0) return "Envie pelo menos uma foto ou vídeo.";
+    if (step === 2 && doneAssets.length === 0) return "Envie pelo menos uma foto ou vídeo.";
+    if (step === 2 && hasPendingUploads) return "Aguarde a conclusão dos uploads.";
     if (step === 3 && !packId) return "Escolha as visualizações que quer comprar.";
     if (step === 4) {
       if (contact.name.trim().length < 2) return "Indique o seu nome.";
@@ -142,6 +245,10 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
 
   async function submit() {
     if (!pack) return;
+    if (hasPendingUploads) {
+      setError("Aguarde a conclusão dos uploads.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
 
@@ -152,7 +259,9 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
         body: JSON.stringify({
           zone,
           packId: pack.id,
-          assets: assets.map(({ url, fileType }) => ({ url, fileType })),
+          // Só pathname/url/tipo do ficheiro chegam ao pedido — nada de blob
+          // metadata extra nem o conteúdo do ficheiro em si.
+          assets: doneAssets.map(({ url, fileType }) => ({ url, fileType })),
           ...contact,
         }),
       });
@@ -236,7 +345,9 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
               {assets.map((asset) => (
                 <div
                   key={asset.id}
-                  className="relative aspect-square overflow-hidden rounded-md border border-line bg-surface"
+                  className={`relative aspect-square overflow-hidden rounded-md border bg-surface ${
+                    asset.status === "error" ? "border-red-strong" : "border-line"
+                  }`}
                 >
                   {asset.fileType.startsWith("video/") ? (
                     <video
@@ -249,14 +360,44 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={asset.previewUrl}
-                      alt={asset.name}
+                      alt={asset.file.name}
                       className="size-full object-cover"
                     />
                   )}
+
+                  {asset.status === "uploading" && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-ink/55 text-white">
+                      <span className="text-[13px] font-bold tabular-nums">
+                        {asset.progress}%
+                      </span>
+                      <div className="h-1 w-3/4 overflow-hidden rounded-full bg-white/30">
+                        <div
+                          className="h-full bg-white transition-all"
+                          style={{ width: `${asset.progress}%` }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {asset.status === "error" && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-red-strong/85 p-1.5 text-center text-white">
+                      <span className="text-[11px] font-medium leading-tight">
+                        {asset.error ?? "Falha no upload."}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => retryAsset(asset.id)}
+                        className="text-[11px] font-semibold underline underline-offset-2"
+                      >
+                        Tentar novamente
+                      </button>
+                    </div>
+                  )}
+
                   <button
                     type="button"
                     onClick={() => removeAsset(asset.id)}
-                    aria-label={`Remover ${asset.name}`}
+                    aria-label={`Remover ${asset.file.name}`}
                     className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-ink/80 text-white transition-colors hover:bg-ink"
                   >
                     <Close className="size-3" />
@@ -268,14 +409,9 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
                 <button
                   type="button"
                   onClick={() => inputRef.current?.click()}
-                  disabled={uploading}
-                  className="grid aspect-square place-items-center rounded-md border border-dashed border-line-strong text-muted transition-colors hover:border-ink hover:text-ink disabled:opacity-50"
+                  className="grid aspect-square place-items-center rounded-md border border-dashed border-line-strong text-muted transition-colors hover:border-ink hover:text-ink"
                 >
-                  {uploading ? (
-                    <span className="text-[11px]">A enviar…</span>
-                  ) : (
-                    <Plus className="size-6" />
-                  )}
+                  <Plus className="size-6" />
                 </button>
               )}
             </div>
@@ -290,7 +426,8 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
             />
 
             <p className="mt-4 text-[13px] text-muted">
-              {assets.length} de {MAX_ASSETS} ficheiros
+              {doneAssets.length} de {MAX_ASSETS} ficheiros
+              {hasPendingUploads ? " · a enviar…" : ""}
             </p>
           </section>
         )}
@@ -390,7 +527,7 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
 
             <dl className="mt-8 border-t border-line">
               <SummaryRow label="Zona" value={zone} />
-              <SummaryRow label="Ficheiros enviados" value={`${assets.length}`} />
+              <SummaryRow label="Ficheiros enviados" value={`${doneAssets.length}`} />
               <SummaryRow
                 label="Visualizações"
                 value={formatNumber(pack.visualizations)}
@@ -406,7 +543,7 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
             <p className="mt-1 text-right text-[12px] text-muted">IVA incluído</p>
 
             <div className="mt-6 flex gap-3 overflow-x-auto pb-1">
-              {assets.map((asset) => (
+              {doneAssets.map((asset) => (
                 <div
                   key={asset.id}
                   className="size-16 shrink-0 overflow-hidden rounded-sm border border-line bg-surface"
@@ -440,11 +577,16 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
         )}
 
         {step < TOTAL_STEPS ? (
-          <Button size="lg" onClick={next} disabled={uploading} className="sm:min-w-44">
+          <Button size="lg" onClick={next} disabled={hasPendingUploads} className="sm:min-w-44">
             Continuar
           </Button>
         ) : (
-          <Button size="lg" onClick={submit} disabled={submitting} className="sm:min-w-64">
+          <Button
+            size="lg"
+            onClick={submit}
+            disabled={submitting || hasPendingUploads}
+            className="sm:min-w-64"
+          >
             {submitting ? "A preparar pagamento…" : "Continuar para pagamento"}
           </Button>
         )}

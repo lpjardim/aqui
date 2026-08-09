@@ -1,24 +1,16 @@
-import { randomUUID } from "node:crypto";
+import { buildAssetPathname } from "@/lib/assets";
 import { localStorageDriver } from "./local";
 import { vercelBlobDriver } from "./vercel-blob";
 import type { StorageDriver } from "./types";
 
 export type { StorageDriver, StoredFile } from "./types";
 
-const EXTENSIONS: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "video/mp4": "mp4",
-};
-
 export function buildAssetKey(contentType: string): string {
-  const extension = EXTENSIONS[contentType] ?? "bin";
-  return `assets/${randomUUID()}.${extension}`;
+  return buildAssetPathname(contentType);
 }
 
 export function buildProofKey(orderId: string): string {
-  return `comprovativos/${orderId}/${randomUUID()}.pdf`;
+  return `comprovativos/${orderId}/${crypto.randomUUID()}.pdf`;
 }
 
 export const storage: StorageDriver =
