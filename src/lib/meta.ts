@@ -1,5 +1,9 @@
 import { prisma } from "@/lib/prisma";
-import { sendInternalNotification } from "@/lib/email";
+import {
+  sendCampaignActivatedEmail,
+  sendCampaignCompletedEmail,
+  sendInternalNotification,
+} from "@/lib/email";
 import { getExpectedMetaCampaignName } from "@/lib/orders";
 import type { Order, User } from "@/generated/prisma/client";
 import type { OrderStatus } from "@/generated/prisma/enums";
@@ -7,6 +11,9 @@ import type { OrderStatus } from "@/generated/prisma/enums";
 const DEFAULT_GRAPH_API_VERSION = "v21.0";
 const FETCH_TIMEOUT_MS = 8_000;
 const META_SYNC_SETTING_KEY = "metaLastSyncAt";
+
+/** Percentagem de entrega a partir da qual enviamos UM alerta interno antecipado. */
+const NEAR_TARGET_THRESHOLD = 0.9;
 
 /** Estados em que uma campanha ainda pode estar a receber entregas da Meta. */
 const SYNCABLE_STATUSES: OrderStatus[] = ["PAID", "IN_REVIEW", "ACTIVE"];
@@ -77,6 +84,73 @@ async function safeReadJson(response: Response): Promise<unknown> {
     return await response.json();
   } catch {
     return null;
+  }
+}
+
+/**
+ * Chamada de ESCRITA à Graph API da Meta (POST). É a única forma de escrita
+ * usada em todo o `lib/meta.ts` — reservada exclusivamente para pausar
+ * campanhas (`pauseMetaCampaign`). Nunca regista o access token em logs.
+ */
+async function metaGraphPost(path: string, params: Record<string, string>): Promise<unknown> {
+  const accessToken = requireAccessToken();
+
+  const url = new URL(`https://graph.facebook.com/${graphApiVersion()}${path}`);
+  const body = new URLSearchParams({ ...params, access_token: accessToken });
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      body,
+      signal: controller.signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    const reason =
+      error instanceof Error && error.name === "AbortError"
+        ? `timeout após ${FETCH_TIMEOUT_MS}ms`
+        : error instanceof Error
+          ? error.message
+          : "erro de rede desconhecido";
+    throw new Error(`Falha de rede ao escrever na Meta Graph API (${path}): ${reason}`);
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  const payload = await safeReadJson(response);
+
+  if (!response.ok) {
+    const message =
+      (payload && typeof payload === "object" && "error" in payload
+        ? (payload as { error?: { message?: string } }).error?.message
+        : undefined) ?? `HTTP ${response.status}`;
+    throw new Error(`Meta Graph API respondeu com erro (${path}): ${message}`);
+  }
+
+  return payload;
+}
+
+export type PauseCampaignResult = { ok: boolean; error?: string };
+
+/**
+ * Pausa uma campanha Meta (`POST /{campaignId}` com `status=PAUSED`) — a
+ * ÚNICA operação de escrita permitida nesta integração. Nunca altera
+ * orçamento, targeting, ad sets, ads ou creatives.
+ *
+ * Idempotente: pausar uma campanha já pausada é um pedido válido para a
+ * própria Graph API (não falha), por isso não fazemos nenhuma verificação
+ * prévia de estado — simplifica o código e evita uma chamada extra.
+ */
+export async function pauseMetaCampaign(campaignId: string): Promise<PauseCampaignResult> {
+  try {
+    await metaGraphPost(`/${campaignId}`, { status: "PAUSED" });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Erro desconhecido" };
   }
 }
 
@@ -174,24 +248,62 @@ export async function getAdPreviewHtml(
   }
 }
 
+function campaignDashboardLink(orderId: string): string {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "") ?? "https://aqui.network";
+  return `${appUrl}/painel/campanhas/${orderId}`;
+}
+
 /**
  * Associa uma encomenda a uma campanha Meta já confirmada (match único pelo
  * nome esperado, ou escolhida manualmente no admin). Guarda o ad set e o
  * anúncio "principal" (primeiro encontrado) apenas para efeitos de
  * pré-visualização — a sincronização de impressions passa a usar sempre o
  * `metaCampaignId` (nível de campanha), nunca precisa destes IDs.
+ *
+ * Dispara também o email "A sua campanha já está ativa" ao cliente — UMA
+ * única vez por encomenda, mesmo que a campanha seja reassociada depois.
  */
 export async function associateOrderWithCampaign(orderId: string, campaignId: string) {
   const children = await getMetaCampaignChildren(campaignId);
 
-  return prisma.order.update({
+  const updated = await prisma.order.update({
     where: { id: orderId },
     data: {
       metaCampaignId: campaignId,
       metaAdSetId: children.adSets[0]?.id ?? null,
       metaAdId: children.ads[0]?.id ?? null,
     },
+    include: { user: true },
   });
+
+  await sendActivationEmailOnce(updated, children.ads.length);
+
+  return updated;
+}
+
+async function sendActivationEmailOnce(order: Order & { user: User }, adCount: number): Promise<void> {
+  if (order.metaActivationEmailSentAt) return;
+
+  try {
+    const dashboardLink = campaignDashboardLink(order.id);
+    await sendCampaignActivatedEmail(order.user.email, {
+      companyName: order.user.companyName,
+      zone: order.zone,
+      purchased: order.visualizationsPurchased,
+      dashboardLink,
+      adPreviewLink: adCount > 0 ? `${dashboardLink}?anuncio=1` : dashboardLink,
+    });
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { metaActivationEmailSentAt: new Date() },
+    });
+  } catch (error) {
+    // Falha a enviar o email nunca deve desfazer a associação Meta já guardada.
+    console.error(
+      `[meta] falha ao enviar email de ativação ao cliente (encomenda ${order.id}):`,
+      error instanceof Error ? error.message : error,
+    );
+  }
 }
 
 /**
@@ -204,8 +316,13 @@ export async function associateOrderWithCampaign(orderId: string, campaignId: st
  *   (o progresso no painel nunca passa de 100%).
  * - O valor "em bruto" devolvido pela Meta fica registado no histórico
  *   (`CampaignUpdate`) para auditoria, mesmo que seja maior que o comprado.
+ * - Aos 90% do alvo, envia UM alerta interno antecipado (não pausa nada).
  * - Ao atingir o alvo pela primeira vez, guarda `targetReachedAt` e envia UMA
- *   notificação interna. Não pausa nem altera o `status` automaticamente.
+ *   notificação interna.
+ * - Sempre que o alvo já foi atingido mas a campanha ainda não está pausada
+ *   (`targetReachedAt` definido e `metaPausedAt` ainda `null`), tenta pausar
+ *   a campanha Meta — isto cobre tanto o momento em que o alvo é atingido
+ *   agora, como retries automáticos de falhas de pausa em syncs anteriores.
  *
  * Pensada para ser chamada tanto pela sincronização automática
  * (`syncActiveCampaigns`) como pelo botão manual no `/admin`.
@@ -228,13 +345,22 @@ export async function applyDeliveredViews(orderId: string, metaImpressions: numb
     order.visualizationsPurchased > 0 &&
     displayValue >= order.visualizationsPurchased;
 
+  const justCrossedNearTarget =
+    !order.nearTargetNotifiedAt &&
+    !justReachedTarget &&
+    !order.targetReachedAt &&
+    order.visualizationsPurchased > 0 &&
+    displayValue / order.visualizationsPurchased >= NEAR_TARGET_THRESHOLD;
+
   const updated = await prisma.$transaction(async (tx) => {
     const next = await tx.order.update({
       where: { id: orderId },
       data: {
         visualizationsDelivered: displayValue,
         ...(justReachedTarget ? { targetReachedAt: new Date() } : {}),
+        ...(justCrossedNearTarget ? { nearTargetNotifiedAt: new Date() } : {}),
       },
+      include: { user: true },
     });
     // Guarda o valor em bruto devolvido pela Meta (auditoria), não o valor
     // já limitado usado para o progresso apresentado.
@@ -244,16 +370,45 @@ export async function applyDeliveredViews(orderId: string, metaImpressions: numb
     return next;
   });
 
+  if (justCrossedNearTarget) {
+    await notifyNearTarget(updated.user, updated);
+  }
+
   if (justReachedTarget) {
-    await notifyTargetReached(order.user, updated);
+    await notifyTargetReached(updated.user, updated);
+  }
+
+  // Tenta pausar (e concluir) sempre que o alvo já está atingido mas a
+  // pausa ainda não foi confirmada — cobre o caso atual e retries.
+  if (updated.targetReachedAt && !updated.metaPausedAt && updated.metaCampaignId) {
+    await tryPauseAndComplete(updated);
   }
 
   return updated;
 }
 
+async function notifyNearTarget(user: User, order: Order): Promise<void> {
+  try {
+    await sendInternalNotification(
+      "Campanha a aproximar-se do limite — Aqui.",
+      [
+        `Encomenda: ${order.id}`,
+        `Cliente: ${user.companyName} (${user.email})`,
+        `Zona: ${order.zone}`,
+        `Visualizações compradas: ${order.visualizationsPurchased}`,
+        `Visualizações Meta atuais: ${order.visualizationsDelivered}`,
+        `(${Math.round((order.visualizationsDelivered / order.visualizationsPurchased) * 100)}% do alvo)`,
+        "",
+        "Apenas informativo — a pausa automática só acontece ao atingir 100%.",
+      ].join("\n"),
+    );
+  } catch (error) {
+    console.error("[meta] falha ao enviar alerta interno de aproximação do alvo", error);
+  }
+}
+
 async function notifyTargetReached(user: User, order: Order): Promise<void> {
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
-  const adminLink = appUrl ? `${appUrl}/admin#order-${order.id}` : null;
+  const adminLink = adminOrderLink(order.id);
 
   try {
     await sendInternalNotification(
@@ -269,13 +424,155 @@ async function notifyTargetReached(user: User, order: Order): Promise<void> {
         order.metaAdId ? `Meta Ad ID: ${order.metaAdId}` : null,
         adminLink ? `Ver no admin: ${adminLink}` : null,
         "",
-        "A campanha NÃO foi pausada automaticamente — confirmar próximos passos manualmente no /admin.",
+        order.metaCampaignId
+          ? "A tentar pausar a campanha na Meta automaticamente."
+          : "Sem metaCampaignId — não é possível pausar automaticamente.",
       ]
         .filter((line): line is string => line !== null)
         .join("\n"),
     );
   } catch (error) {
     console.error("[meta] falha ao enviar notificação interna de alvo atingido", error);
+  }
+}
+
+function adminOrderLink(orderId: string): string | null {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, "");
+  return appUrl ? `${appUrl}/admin#order-${orderId}` : null;
+}
+
+/**
+ * Tenta pausar a campanha Meta de uma encomenda cujo alvo já foi atingido, e
+ * concluir o fluxo (status `COMPLETED`, email interno, email ao cliente) só
+ * depois de a Meta confirmar a pausa. Nunca pausa encomendas canceladas,
+ * reembolsadas, já concluídas ou sem `metaCampaignId` — chamada apenas
+ * quando essas condições já foram validadas por quem invoca esta função.
+ *
+ * Se a pausa falhar: não marca como concluída, mantém `targetReachedAt`,
+ * regista o erro em `metaPauseLastError` e envia um email interno de falha —
+ * a tentativa repete-se automaticamente no próximo sync (`applyDeliveredViews`)
+ * ou manualmente pelo botão "Tentar pausar novamente" no `/admin`.
+ */
+async function tryPauseAndComplete(order: Order & { user: User }): Promise<void> {
+  // Defesa extra: nunca pausar encomendas canceladas, reembolsadas, já
+  // concluídas ou sem campanha associada, mesmo que chamada diretamente
+  // (ex.: `retryMetaPause`) em vez de vir do fluxo normal de sync.
+  if (!order.metaCampaignId) return;
+  if (!SYNCABLE_STATUSES.includes(order.status)) return;
+
+  const result = await pauseMetaCampaign(order.metaCampaignId);
+
+  if (!result.ok) {
+    console.error(
+      `[meta] falha ao pausar a campanha ${order.metaCampaignId} (encomenda ${order.id}): ${result.error}`,
+    );
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { metaPauseLastError: result.error ?? "Erro desconhecido" },
+    });
+    await notifyPauseFailed(order.user, order, result.error);
+    return;
+  }
+
+  const completed = await prisma.order.update({
+    where: { id: order.id },
+    data: {
+      metaPausedAt: new Date(),
+      metaPauseReason: "TARGET_REACHED",
+      metaPauseLastError: null,
+      status: "COMPLETED",
+    },
+    include: { user: true },
+  });
+
+  await notifyPauseConfirmed(completed.user, completed);
+  await sendCompletionEmailOnce(completed);
+}
+
+/**
+ * Repete manualmente a tentativa de pausa para uma encomenda cujo alvo já
+ * foi atingido mas cuja pausa ainda não foi confirmada — usada pelo botão
+ * "Tentar pausar novamente" no `/admin`.
+ */
+export async function retryMetaPause(orderId: string): Promise<void> {
+  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { user: true } });
+  if (!order) throw new Error("Encomenda não encontrada.");
+  if (!order.targetReachedAt) throw new Error("Esta encomenda ainda não atingiu o alvo.");
+  if (order.metaPausedAt) return; // já está pausada, nada a fazer
+  if (!order.metaCampaignId) throw new Error("Esta encomenda não tem campanha Meta associada.");
+  if (!SYNCABLE_STATUSES.includes(order.status)) {
+    throw new Error("Esta encomenda já não está num estado em que possa ser pausada.");
+  }
+
+  await tryPauseAndComplete(order);
+}
+
+async function notifyPauseFailed(user: User, order: Order, error?: string): Promise<void> {
+  const adminLink = adminOrderLink(order.id);
+  try {
+    await sendInternalNotification(
+      "Limite atingido — falha ao pausar na Meta — Aqui.",
+      [
+        `Encomenda: ${order.id}`,
+        `Cliente: ${user.companyName} (${user.email})`,
+        `Zona: ${order.zone}`,
+        `Meta Campaign ID: ${order.metaCampaignId}`,
+        `Erro: ${error ?? "desconhecido"}`,
+        adminLink ? `Ver no admin: ${adminLink}` : null,
+        "",
+        "A encomenda mantém-se ativa — vamos tentar pausar de novo no próximo sync, ou use \"Tentar pausar novamente\" no /admin.",
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+    );
+  } catch (notifyError) {
+    console.error("[meta] falha ao enviar notificação interna de falha de pausa", notifyError);
+  }
+}
+
+async function notifyPauseConfirmed(user: User, order: Order): Promise<void> {
+  const adminLink = adminOrderLink(order.id);
+  try {
+    await sendInternalNotification(
+      "Campanha pausada e concluída — Aqui.",
+      [
+        `Encomenda: ${order.id}`,
+        `Cliente: ${user.companyName} (${user.email})`,
+        `Zona: ${order.zone}`,
+        `Visualizações compradas: ${order.visualizationsPurchased}`,
+        `Visualizações entregues: ${order.visualizationsDelivered}`,
+        `Meta Campaign ID: ${order.metaCampaignId}`,
+        adminLink ? `Ver no admin: ${adminLink}` : null,
+      ]
+        .filter((line): line is string => line !== null)
+        .join("\n"),
+    );
+  } catch (error) {
+    console.error("[meta] falha ao enviar notificação interna de pausa confirmada", error);
+  }
+}
+
+async function sendCompletionEmailOnce(order: Order & { user: User }): Promise<void> {
+  if (order.completionEmailSentAt) return;
+
+  try {
+    await sendCampaignCompletedEmail(order.user.email, {
+      companyName: order.user.companyName,
+      zone: order.zone,
+      purchased: order.visualizationsPurchased,
+      delivered: order.visualizationsDelivered,
+      dashboardLink: campaignDashboardLink(order.id),
+    });
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { completionEmailSentAt: new Date() },
+    });
+  } catch (error) {
+    // Falha a enviar o email nunca deve desfazer a pausa/conclusão já confirmadas.
+    console.error(
+      `[meta] falha ao enviar email de conclusão ao cliente (encomenda ${order.id}):`,
+      error instanceof Error ? error.message : error,
+    );
   }
 }
 

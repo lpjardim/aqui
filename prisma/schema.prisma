@@ -44,13 +44,23 @@ model Order {
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
-  // Integração Meta Marketing API (preenchido manualmente por agora;
-  // pensado para vir a ser sincronizado automaticamente com a Graph API).
+  // Integração Meta Marketing API — associação automática pelo nome
+  // esperado da campanha (ver `getExpectedMetaCampaignName`).
   metaCampaignId  String?
   metaAdSetId     String?
   metaAdId        String?
   metaAdUrl       String?
   targetReachedAt DateTime?
+
+  // Pausa automática da campanha Meta ao atingir o alvo, e emails
+  // automáticos ao cliente — cada um dos campos "*SentAt"/"*At" garante que
+  // a respetiva ação (email, pausa) só acontece UMA VEZ por encomenda.
+  metaPausedAt              DateTime?
+  metaPauseReason           String?
+  metaPauseLastError        String?
+  metaActivationEmailSentAt DateTime?
+  completionEmailSentAt     DateTime?
+  nearTargetNotifiedAt      DateTime?
 
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   assets  Asset[]
@@ -84,7 +94,9 @@ model CampaignUpdate {
   @@index([orderId])
 }
 
-/** Pares chave/valor simples para configurações globais (ex.: última sincronização Meta). */
+/**
+ * Pares chave/valor simples para configurações globais (ex.: última sincronização Meta).
+ */
 model AppSetting {
   key       String   @id
   value     String

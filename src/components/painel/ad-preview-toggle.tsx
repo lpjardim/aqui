@@ -8,8 +8,16 @@ import { useState } from "react";
  * nosso próprio backend a partir da resposta oficial da Meta — nunca vem de
  * input do utilizador — por isso é seguro injetá-lo diretamente.
  */
-export function AdPreviewToggle({ label, html }: { label: string; html: string }) {
-  const [open, setOpen] = useState(false);
+export function AdPreviewToggle({
+  label,
+  html,
+  defaultOpen = false,
+}: {
+  label: string;
+  html: string;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
 
   return (
     <div>

@@ -12,6 +12,7 @@ import { buildProofKey, storage } from "@/lib/storage";
 import {
   associateOrderWithCampaign,
   findMetaCampaignsByExactName,
+  retryMetaPause,
   syncActiveCampaigns,
   type MetaCampaignMatch,
 } from "@/lib/meta";
@@ -157,6 +158,51 @@ export async function markCompleted(formData: FormData) {
   ]);
 
   revalidatePath("/admin");
+}
+
+export type RetryPauseState = { message: string | null; error: string | null };
+
+/**
+ * Repete manualmente a tentativa de pausar a campanha Meta de uma encomenda
+ * cujo alvo já foi atingido mas a pausa anterior falhou. Só deve ser
+ * mostrado no `/admin` quando `targetReachedAt` existe, `metaPausedAt` é
+ * `null` e a encomenda tem `metaCampaignId`.
+ */
+export async function retryPauseMetaCampaign(
+  _previous: RetryPauseState,
+  formData: FormData,
+): Promise<RetryPauseState> {
+  await assertAdmin();
+
+  const orderId = String(formData.get("orderId") ?? "");
+  if (!orderId) {
+    return { message: null, error: "Encomenda inválida." };
+  }
+
+  try {
+    await retryMetaPause(orderId);
+  } catch (error) {
+    return {
+      message: null,
+      error: error instanceof Error ? error.message : "Erro desconhecido ao tentar pausar.",
+    };
+  }
+
+  revalidatePath("/admin");
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: { metaPausedAt: true, metaPauseLastError: true },
+  });
+
+  if (order?.metaPausedAt) {
+    return { message: "Campanha pausada com sucesso.", error: null };
+  }
+
+  return {
+    message: null,
+    error: order?.metaPauseLastError ?? "A pausa continua a falhar — ver detalhe na secção Meta.",
+  };
 }
 
 export type MetaSyncState = { message: string | null; error: string | null };

@@ -9,6 +9,7 @@ import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
 import { MetaAssociation } from "./meta-association";
+import { RetryPauseButton } from "./retry-pause-button";
 import { DeleteOrderButton } from "./delete-order-button";
 import { adminLogout, markCompleted, updateStatus, uploadProof } from "./actions";
 import type { OrderStatus } from "@/generated/prisma/enums";
@@ -193,17 +194,22 @@ export default async function AdminPage() {
                 </h3>
                 <div className="text-right">
                   <p className="text-[12px] text-muted">
-                    Visualizações entregues (via Meta):{" "}
+                    Impressions atuais / alvo:{" "}
                     <span className="font-semibold text-ink">
                       {formatNumber(order.visualizationsDelivered)} /{" "}
                       {formatNumber(order.visualizationsPurchased)}
                     </span>
                   </p>
-                  {order.targetReachedAt && (
-                    <p className="mt-0.5 text-[12px] text-muted">
-                      Alvo atingido em {formatDateTime(order.targetReachedAt)}
-                    </p>
-                  )}
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    Alvo atingido:{" "}
+                    {order.targetReachedAt
+                      ? `sim (${formatDateTime(order.targetReachedAt)})`
+                      : "não"}
+                  </p>
+                  <p className="mt-0.5 text-[12px] text-muted">
+                    Meta pausada:{" "}
+                    {order.metaPausedAt ? `sim (${formatDateTime(order.metaPausedAt)})` : "não"}
+                  </p>
                 </div>
               </div>
 
@@ -212,6 +218,18 @@ export default async function AdminPage() {
                 expectedName={getExpectedMetaCampaignName(order)}
                 metaCampaignId={order.metaCampaignId}
               />
+
+              {order.targetReachedAt && !order.metaPausedAt && order.metaCampaignId && (
+                <div className="mt-3 rounded-sm border border-red-strong/30 bg-red-strong/5 p-3">
+                  <p className="text-[12px] font-semibold text-red-strong">
+                    Limite atingido — falha ao pausar na Meta
+                  </p>
+                  {order.metaPauseLastError && (
+                    <p className="mt-1 text-[11px] text-muted">{order.metaPauseLastError}</p>
+                  )}
+                  <RetryPauseButton orderId={order.id} />
+                </div>
+              )}
             </div>
           </article>
         ))}

@@ -1,3 +1,5 @@
+import { formatNumber } from "@/lib/format";
+
 type SendEmailInput = {
   to: string;
   subject: string;
@@ -80,6 +82,118 @@ export async function sendLoginEmail(to: string, link: string): Promise<void> {
         </p>
         <p style="color: #6b7280; font-size: 14px;">Se não pediu este acesso, ignore este email.</p>
         <p>Aqui.</p>
+      </div>
+    `,
+  });
+}
+
+type CampaignActivatedInput = {
+  companyName: string;
+  zone: string;
+  purchased: number;
+  dashboardLink: string;
+  adPreviewLink: string;
+};
+
+/** Enviado ao cliente UMA vez, quando a Order é associada com sucesso a uma campanha Meta. */
+export async function sendCampaignActivatedEmail(
+  to: string,
+  { companyName, zone, purchased, dashboardLink, adPreviewLink }: CampaignActivatedInput,
+): Promise<void> {
+  await sendEmail({
+    to,
+    subject: "A sua campanha já está ativa — Aqui.",
+    text: [
+      `Olá, ${companyName},`,
+      "",
+      `A sua campanha em ${zone} já está a decorrer e a entregar as ${formatNumber(purchased)} visualizações que comprou.`,
+      "",
+      `Acompanhar campanha: ${dashboardLink}`,
+      `Ver anúncio: ${adPreviewLink}`,
+      "",
+      "Assim que atingir o objetivo, avisamo-lo por email.",
+      "",
+      "Aqui.",
+    ].join("\n"),
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; max-width: 480px; margin: 0 auto;">
+        <p>Olá, ${companyName},</p>
+        <p>
+          A sua campanha em <strong>${zone}</strong> já está a decorrer e a entregar as
+          <strong>${formatNumber(purchased)}</strong> visualizações que comprou.
+        </p>
+        <p style="text-align: center; margin: 32px 0;">
+          <a href="${dashboardLink}" target="_blank" rel="noopener noreferrer" style="background-color: #dc2626; color: #ffffff; text-decoration: none; font-weight: 600; padding: 14px 32px; border-radius: 8px; display: inline-block;">
+            Acompanhar campanha
+          </a>
+        </p>
+        <p style="text-align: center; margin: 0 0 24px;">
+          <a href="${adPreviewLink}" target="_blank" rel="noopener noreferrer" style="color: #dc2626; font-size: 14px; text-decoration: underline;">
+            Ver anúncio ↗
+          </a>
+        </p>
+        <p style="color: #6b7280; font-size: 14px;">
+          Assim que atingir o objetivo de visualizações, avisamo-lo por email.
+        </p>
+        <p>Aqui.</p>
+      </div>
+    `,
+  });
+}
+
+type CampaignCompletedInput = {
+  companyName: string;
+  zone: string;
+  purchased: number;
+  delivered: number;
+  dashboardLink: string;
+};
+
+/** Enviado ao cliente UMA vez, depois de a pausa da campanha Meta ser confirmada. */
+export async function sendCampaignCompletedEmail(
+  to: string,
+  { companyName, zone, purchased, delivered, dashboardLink }: CampaignCompletedInput,
+): Promise<void> {
+  await sendEmail({
+    to,
+    subject: "A sua campanha foi concluída — Aqui.",
+    text: [
+      `Olá, ${companyName},`,
+      "",
+      `A sua campanha em ${zone} foi concluída com sucesso.`,
+      "",
+      `Visualizações compradas: ${formatNumber(purchased)}`,
+      `Visualizações entregues: ${formatNumber(delivered)}`,
+      "",
+      `Ver painel: ${dashboardLink}`,
+      "",
+      "O comprovativo final fica disponível no seu painel assim que preparado pela nossa equipa.",
+      "",
+      "Obrigado por confiar na Aqui.",
+    ].join("\n"),
+    html: `
+      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #1a1a1a; max-width: 480px; margin: 0 auto;">
+        <p>Olá, ${companyName},</p>
+        <p>A sua campanha em <strong>${zone}</strong> foi concluída com sucesso.</p>
+        <table style="width: 100%; margin: 24px 0; border-collapse: collapse;">
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Visualizações compradas</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(purchased)}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">Visualizações entregues</td>
+            <td style="padding: 8px 0; text-align: right; font-weight: 600;">${formatNumber(delivered)}</td>
+          </tr>
+        </table>
+        <p style="text-align: center; margin: 32px 0;">
+          <a href="${dashboardLink}" target="_blank" rel="noopener noreferrer" style="background-color: #dc2626; color: #ffffff; text-decoration: none; font-weight: 600; padding: 14px 32px; border-radius: 8px; display: inline-block;">
+            Ver painel
+          </a>
+        </p>
+        <p style="color: #6b7280; font-size: 14px;">
+          O comprovativo final fica disponível no seu painel assim que preparado pela nossa equipa.
+        </p>
+        <p>Obrigado por confiar na Aqui.</p>
       </div>
     `,
   });

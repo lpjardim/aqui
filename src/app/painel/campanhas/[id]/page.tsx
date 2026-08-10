@@ -11,8 +11,15 @@ import { getAdPreviewHtml, getMetaCampaignChildren } from "@/lib/meta";
 import { campaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 
-export default async function CampanhaPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function CampanhaPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ anuncio?: string }>;
+}) {
   const { id } = await params;
+  const { anuncio } = await searchParams;
 
   const user = await getCurrentUser();
   if (!user) redirect("/entrar");
@@ -39,7 +46,11 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
           {campaignName(user.companyName, order.zone)} — {formatDate(order.createdAt)}
         </h1>
         {adPreview ? (
-          <AdPreviewToggle label={adPreview.label} html={adPreview.html} />
+          <AdPreviewToggle
+            label={adPreview.label}
+            html={adPreview.html}
+            defaultOpen={anuncio === "1"}
+          />
         ) : (
           order.metaAdUrl && (
             <a
