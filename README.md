@@ -56,6 +56,18 @@ Em local:
 stripe listen --forward-to localhost:3000/api/stripe/webhook
 ```
 
+O Stripe não segue redirects nas entregas de webhook: um 3xx conta como falha. Antes de
+configurar o endpoint no Dashboard da Stripe, confirma que a URL escolhida não sofre
+redirect (por exemplo, `www` vs. domínio nu, ou um domínio secundário a apontar para o
+principal na Vercel):
+
+```bash
+curl -I -X POST "https://<dominio-exacto>/api/stripe/webhook"
+```
+
+Se devolver `308`, usa o domínio indicado em `Location` (ou corrige em Vercel → Settings →
+Domains qual domínio é o principal) antes de guardar o endpoint na Stripe.
+
 ## Storage
 
 `src/lib/storage` expõe um `StorageDriver` com `put`, `remove` e `read`. Existem dois drivers:
