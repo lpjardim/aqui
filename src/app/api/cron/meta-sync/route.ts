@@ -5,21 +5,18 @@ export const dynamic = "force-dynamic";
 
 /**
  * Disparada pelo Vercel Cron (GET, com `Authorization: Bearer <CRON_SECRET>`
- * automático) ou por um scheduler externo (ex.: Upstash QStash, que só
- * suporta POST). Aceita o segredo tanto no header `Authorization` como num
- * query param `secret=`, para funcionar em qualquer um dos dois casos sem
- * exigir configuração de headers customizados no scheduler externo.
+ * automático) ou por um scheduler externo (Upstash QStash, POST, que reenvia
+ * `Authorization: Bearer <CRON_SECRET>` via header forwarding oficial
+ * `Upstash-Forward-Authorization`). Autenticação exclusivamente pelo header
+ * `Authorization` — nunca por query param, para o segredo nunca aparecer em
+ * URLs, logs de acesso ou histórico do browser.
  */
 function isAuthorized(request: Request): boolean {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) return false;
 
   const authHeader = request.headers.get("authorization");
-  if (authHeader === `Bearer ${cronSecret}`) return true;
-
-  const url = new URL(request.url);
-  const querySecret = url.searchParams.get("secret");
-  return querySecret === cronSecret;
+  return authHeader === `Bearer ${cronSecret}`;
 }
 
 async function runSync(): Promise<NextResponse> {
