@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 import { OrderForm } from "@/components/pedido/order-form";
-import { getPack, type PackId } from "@/lib/packs";
+import { getPack } from "@/lib/packs";
 
 export const metadata: Metadata = {
   title: "Pedido",
@@ -12,10 +12,11 @@ export const metadata: Metadata = {
 export default async function PedidoPage({
   searchParams,
 }: {
-  searchParams: Promise<{ pack?: string }>;
+  searchParams: Promise<{ pack?: string; custom?: string }>;
 }) {
-  const { pack } = await searchParams;
-  const initialPack = (getPack(pack)?.id ?? null) as PackId | null;
+  const { pack, custom } = await searchParams;
+  const initialViews = getPack(pack)?.visualizations ?? null;
+  const initialCustom = custom === "1";
 
   return (
     <div className="min-h-dvh">
@@ -28,7 +29,7 @@ export default async function PedidoPage({
       </header>
 
       <main className="container-page py-12 md:py-16">
-        <OrderForm initialPack={initialPack} />
+        <OrderForm initialViews={initialViews} initialCustom={initialCustom} />
       </main>
     </div>
   );

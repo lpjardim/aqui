@@ -137,23 +137,49 @@ export async function confirmMetaCampaign(formData: FormData) {
   revalidatePath("/admin");
 }
 
+/**
+ * Marca manualmente o ciclo de entrega ATIVO de uma encomenda como
+ * concluído (sem passar pela Meta) — usada para casos excecionais em que a
+ * entrega foi confirmada por outra via. Para `ONE_TIME` marca também
+ * `Order.status = COMPLETED`; para `MONTHLY` só o ciclo é concluído — a
+ * subscrição continua ativa para a próxima renovação.
+ */
 export async function markCompleted(formData: FormData) {
   await assertAdmin();
 
   const orderId = String(formData.get("orderId"));
-  const order = await prisma.order.findUnique({ where: { id: orderId } });
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { cycles: { where: { status: "ACTIVE" }, orderBy: { createdAt: "desc" }, take: 1 } },
+  });
   if (!order) return;
 
+  const cycle = order.cycles[0];
+  const now = new Date();
+
   await prisma.$transaction([
+    ...(cycle
+      ? [
+          prisma.deliveryCycle.update({
+            where: { id: cycle.id },
+            data: {
+              status: "COMPLETED",
+              deliveredViews: cycle.targetViews,
+              targetReachedAt: cycle.targetReachedAt ?? now,
+              completedAt: now,
+            },
+          }),
+          prisma.campaignUpdate.create({
+            data: { orderId, cycleId: cycle.id, visualizationsDelivered: cycle.targetViews },
+          }),
+        ]
+      : []),
     prisma.order.update({
       where: { id: orderId },
       data: {
-        status: "COMPLETED",
         visualizationsDelivered: order.visualizationsPurchased,
+        ...(order.billingFrequency === "ONE_TIME" ? { status: "COMPLETED" } : {}),
       },
-    }),
-    prisma.campaignUpdate.create({
-      data: { orderId, visualizationsDelivered: order.visualizationsPurchased },
     }),
   ]);
 
@@ -163,10 +189,10 @@ export async function markCompleted(formData: FormData) {
 export type RetryPauseState = { message: string | null; error: string | null };
 
 /**
- * Repete manualmente a tentativa de pausar a campanha Meta de uma encomenda
- * cujo alvo já foi atingido mas a pausa anterior falhou. Só deve ser
- * mostrado no `/admin` quando `targetReachedAt` existe, `metaPausedAt` é
- * `null` e a encomenda tem `metaCampaignId`.
+ * Repete manualmente a tentativa de pausar a campanha Meta do ciclo de
+ * entrega cujo alvo já foi atingido mas a pausa anterior falhou. Só deve
+ * ser mostrado no `/admin` quando `targetReachedAt` existe no ciclo,
+ * `metaPausedAt` é `null` e a encomenda tem `metaCampaignId`.
  */
 export async function retryPauseMetaCampaign(
   _previous: RetryPauseState,
@@ -174,13 +200,13 @@ export async function retryPauseMetaCampaign(
 ): Promise<RetryPauseState> {
   await assertAdmin();
 
-  const orderId = String(formData.get("orderId") ?? "");
-  if (!orderId) {
-    return { message: null, error: "Encomenda inválida." };
+  const cycleId = String(formData.get("cycleId") ?? "");
+  if (!cycleId) {
+    return { message: null, error: "Ciclo inválido." };
   }
 
   try {
-    await retryMetaPause(orderId);
+    await retryMetaPause(cycleId);
   } catch (error) {
     return {
       message: null,
@@ -190,18 +216,18 @@ export async function retryPauseMetaCampaign(
 
   revalidatePath("/admin");
 
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
+  const cycle = await prisma.deliveryCycle.findUnique({
+    where: { id: cycleId },
     select: { metaPausedAt: true, metaPauseLastError: true },
   });
 
-  if (order?.metaPausedAt) {
+  if (cycle?.metaPausedAt) {
     return { message: "Campanha pausada com sucesso.", error: null };
   }
 
   return {
     message: null,
-    error: order?.metaPauseLastError ?? "A pausa continua a falhar — ver detalhe na secção Meta.",
+    error: cycle?.metaPauseLastError ?? "A pausa continua a falhar — ver detalhe na secção Meta.",
   };
 }
 

@@ -17,6 +17,16 @@ enum OrderStatus {
   REFUNDED
 }
 
+enum BillingFrequency {
+  ONE_TIME
+  MONTHLY
+}
+
+enum DeliveryCycleStatus {
+  ACTIVE
+  COMPLETED
+}
+
 model User {
   id          String   @id @default(cuid())
   name        String
@@ -44,31 +54,90 @@ model Order {
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
-  // Integração Meta Marketing API — associação automática pelo nome
-  // esperado da campanha (ver `getExpectedMetaCampaignName`).
-  metaCampaignId  String?
-  metaAdSetId     String?
-  metaAdId        String?
-  metaAdUrl       String?
-  targetReachedAt DateTime?
+  // Faturação — por defeito ONE_TIME cobre automaticamente encomendas
+  // antigas, criadas antes de existir a opção mensal.
+  billingFrequency     BillingFrequency @default(ONE_TIME)
+  stripeCustomerId     String?
+  stripeSubscriptionId String?          @unique
+  // Espelha o estado da Subscription na Stripe (active/past_due/canceled/...).
+  subscriptionStatus   String?
+  cancelAtPeriodEnd    Boolean          @default(false)
 
-  // Pausa automática da campanha Meta ao atingir o alvo, e emails
-  // automáticos ao cliente — cada um dos campos "*SentAt"/"*At" garante que
-  // a respetiva ação (email, pausa) só acontece UMA VEZ por encomenda.
-  metaPausedAt              DateTime?
-  metaPauseReason           String?
-  metaPauseLastError        String?
+  // Integração Meta Marketing API — associação automática pelo nome
+  // esperado da campanha (ver `getExpectedMetaCampaignName`). A campanha é
+  // sempre "principal" da Order (reutilizada em todos os ciclos mensais),
+  // nunca por ciclo.
+  metaCampaignId String?
+  metaAdSetId    String?
+  metaAdId       String?
+  metaAdUrl      String?
+
+  // Email "a sua campanha já está ativa" — continua ao nível da Order
+  // (dispara uma única vez, na primeira associação, independentemente de
+  // quantos ciclos de entrega a encomenda venha a ter).
   metaActivationEmailSentAt DateTime?
-  completionEmailSentAt     DateTime?
-  nearTargetNotifiedAt      DateTime?
+
+  // --- Histórico anterior aos DeliveryCycle — mantidos apenas para não
+  // perder dados de encomendas antigas (criadas antes desta migration). O
+  // código novo lê/escreve exclusivamente nos campos equivalentes do
+  // `DeliveryCycle`; não usar estes campos em código novo.
+  targetReachedAt       DateTime?
+  metaPausedAt          DateTime?
+  metaPauseReason       String?
+  metaPauseLastError    String?
+  completionEmailSentAt DateTime?
+  nearTargetNotifiedAt  DateTime?
 
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   assets  Asset[]
   updates CampaignUpdate[]
+  cycles  DeliveryCycle[]
 
   @@index([userId])
   @@index([status])
   @@index([metaAdId])
+}
+
+/**
+ * Um ciclo de entrega representa UMA janela de entrega de visualizações:
+ * a totalidade de uma encomenda ONE_TIME, ou UM mês de uma subscrição
+ * MONTHLY. A mesma campanha Meta (`Order.metaCampaignId`) é reutilizada em
+ * todos os ciclos — cada ciclo só controla o seu próprio alvo/entrega.
+ */
+model DeliveryCycle {
+  id             String              @id @default(cuid())
+  orderId        String
+  targetViews    Int
+  deliveredViews Int                 @default(0)
+  startsAt       DateTime
+  endsAt         DateTime
+  status         DeliveryCycleStatus @default(ACTIVE)
+
+  targetReachedAt DateTime?
+  completedAt     DateTime?
+
+  // Pausa/reativação da campanha Meta para este ciclo específico.
+  metaPausedAt       DateTime?
+  metaPauseReason    String?
+  metaPauseLastError String?
+  metaResumedAt      DateTime?
+
+  // Cada um destes "*At" garante que a respetiva ação (alerta, email) só
+  // acontece UMA VEZ por ciclo.
+  nearTargetNotifiedAt  DateTime?
+  completionEmailSentAt DateTime?
+
+  // Idempotência: um `invoice.paid` da Stripe nunca cria dois ciclos.
+  stripeInvoiceId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order   Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  updates CampaignUpdate[]
+
+  @@index([orderId])
+  @@index([status])
 }
 
 model Asset {
@@ -86,12 +155,15 @@ model Asset {
 model CampaignUpdate {
   id                      String   @id @default(cuid())
   orderId                 String
+  cycleId                 String?
   visualizationsDelivered Int
   createdAt               DateTime @default(now())
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  cycle DeliveryCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
 
   @@index([orderId])
+  @@index([cycleId])
 }
 
 /**

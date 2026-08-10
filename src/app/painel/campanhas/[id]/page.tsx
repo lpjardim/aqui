@@ -2,13 +2,19 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Download } from "@/components/icons";
 import { AdPreviewToggle } from "@/components/painel/ad-preview-toggle";
+import { CancelRenewalButton } from "@/components/painel/cancel-renewal-button";
 import { ProgressRing } from "@/components/painel/progress-ring";
 import { StatusPill } from "@/components/painel/status-pill";
 import { buttonClasses } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
 import { getAdPreviewHtml, getMetaCampaignChildren } from "@/lib/meta";
-import { campaignName, progress } from "@/lib/orders";
+import {
+  FREQUENCY_LABELS,
+  SUBSCRIPTION_STATUS_LABELS,
+  campaignName,
+  progress,
+} from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 
 export default async function CampanhaPage({
@@ -26,13 +32,19 @@ export default async function CampanhaPage({
 
   const order = await prisma.order.findFirst({
     where: { id, userId: user.id },
+    include: { cycles: { orderBy: { createdAt: "desc" }, take: 1 } },
   });
 
   if (!order) notFound();
 
-  const percent = progress(order.visualizationsDelivered, order.visualizationsPurchased);
-  const remaining = Math.max(0, order.visualizationsPurchased - order.visualizationsDelivered);
-  const completed = order.status === "COMPLETED";
+  const cycle = order.cycles[0];
+  const isMonthly = order.billingFrequency === "MONTHLY";
+  const deliveredViews = cycle?.deliveredViews ?? order.visualizationsDelivered;
+  const targetViews = cycle?.targetViews ?? order.visualizationsPurchased;
+
+  const percent = progress(deliveredViews, targetViews);
+  const remaining = Math.max(0, targetViews - deliveredViews);
+  const completed = isMonthly ? cycle?.status === "COMPLETED" : order.status === "COMPLETED";
   const adPreview = await loadAdPreview(order.metaCampaignId, order.metaAdId);
 
   return (
@@ -69,32 +81,64 @@ export default async function CampanhaPage({
         <dl className="border-t border-line">
           <Row label="Zona" value={order.zone} />
           <Row label="Estado" value={<StatusPill status={order.status} />} />
+          <Row label="Frequência" value={FREQUENCY_LABELS[order.billingFrequency]} />
           <Row
-            label="Visualizações compradas"
-            value={formatNumber(order.visualizationsPurchased)}
+            label={isMonthly ? "Visualizações/mês" : "Visualizações compradas"}
+            value={formatNumber(targetViews)}
           />
           <Row
-            label="Visualizações entregues"
-            value={formatNumber(order.visualizationsDelivered)}
+            label={isMonthly ? "Entregues neste ciclo" : "Visualizações entregues"}
+            value={formatNumber(deliveredViews)}
           />
           <Row label="Visualizações restantes" value={formatNumber(remaining)} />
+          {isMonthly && cycle && (
+            <Row label="Próxima renovação" value={formatDate(cycle.endsAt)} />
+          )}
+          {isMonthly && (
+            <Row
+              label="Estado da subscrição"
+              value={
+                order.subscriptionStatus
+                  ? SUBSCRIPTION_STATUS_LABELS[order.subscriptionStatus] ?? order.subscriptionStatus
+                  : "—"
+              }
+            />
+          )}
         </dl>
 
         <div className="flex flex-col items-center gap-4">
-          <ProgressRing
-            percent={percent}
-            delivered={order.visualizationsDelivered}
-            purchased={order.visualizationsPurchased}
-          />
+          <ProgressRing percent={percent} delivered={deliveredViews} purchased={targetViews} />
           <p className="text-center text-[14px] font-medium">
             {completed
-              ? "Campanha concluída"
-              : `${formatNumber(order.visualizationsDelivered)} / ${formatNumber(
-                  order.visualizationsPurchased,
-                )} visualizações`}
+              ? isMonthly
+                ? "Ciclo concluído"
+                : "Campanha concluída"
+              : `${formatNumber(deliveredViews)} / ${formatNumber(targetViews)} visualizações`}
           </p>
         </div>
       </div>
+
+      {isMonthly && (
+        <div className="mt-10 border-t border-line pt-8">
+          <h2 className="text-[15px] font-bold">Renovação mensal</h2>
+          {order.cancelAtPeriodEnd ? (
+            <p className="mt-2 text-[14px] text-muted">
+              A renovação está cancelada. Esta campanha continua a decorrer até ao fim do ciclo
+              atual e não será cobrada novamente.
+            </p>
+          ) : (
+            <>
+              <p className="mt-2 text-[14px] text-muted">
+                Renova automaticamente todos os meses. Pode cancelar quando quiser — o ciclo atual
+                continua normalmente até ao fim.
+              </p>
+              <div className="mt-4">
+                <CancelRenewalButton orderId={order.id} />
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="mt-10 border-t border-line pt-8">
         {order.proofUrl ? (

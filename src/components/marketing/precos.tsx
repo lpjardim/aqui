@@ -8,7 +8,7 @@ export function Precos() {
       <div className="container-page">
         <h2 className="text-[30px] font-black leading-tight sm:text-[40px]">Preços</h2>
         <p className="mt-3 max-w-md text-[16px] text-muted">
-          Escolha quantas visualizações quer comprar. Sem mensalidades.
+          Escolha quantas visualizações quer comprar. Pague uma vez ou todos os meses.
         </p>
 
         <div className="mt-10 grid gap-5 md:grid-cols-3">
@@ -30,9 +30,16 @@ export function Precos() {
               </p>
               <p className="mt-1.5 text-[14px] text-muted">visualizações</p>
 
-              <p className="mt-8 text-[34px] font-black leading-none tracking-[-0.04em]">
-                {formatPrice(pack.price)}
-              </p>
+              <div className="mt-8 space-y-1">
+                <p className="text-[28px] font-black leading-none tracking-[-0.04em]">
+                  {formatPrice(pack.price)}{" "}
+                  <span className="text-[14px] font-medium text-muted">uma vez</span>
+                </p>
+                <p className="text-[16px] font-bold leading-none">
+                  {formatPrice(pack.monthlyPrice)}
+                  <span className="text-[13px] font-medium text-muted">/mês</span>
+                </p>
+              </div>
               <p className="mt-1.5 text-[13px] text-muted">IVA incluído</p>
 
               <ButtonLink
@@ -46,6 +53,13 @@ export function Precos() {
             </div>
           ))}
         </div>
+
+        <p className="mt-8 text-center text-[14px] text-muted">
+          Precisa de outro volume?{" "}
+          <a href="/pedido?custom=1" className="font-semibold text-ink underline underline-offset-2">
+            Escolher outro volume
+          </a>
+        </p>
       </div>
     </section>
   );

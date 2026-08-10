@@ -3,7 +3,14 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { isAdmin } from "@/lib/auth";
 import { formatDate, formatDateTime, formatNumber, formatPrice } from "@/lib/format";
-import { STATUS_LABELS, campaignName, getExpectedMetaCampaignName, progress } from "@/lib/orders";
+import {
+  FREQUENCY_LABELS,
+  STATUS_LABELS,
+  SUBSCRIPTION_STATUS_LABELS,
+  campaignName,
+  getExpectedMetaCampaignName,
+  progress,
+} from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
@@ -36,7 +43,14 @@ export default async function AdminPage() {
   const [orders, lastMetaSyncAt] = await Promise.all([
     prisma.order.findMany({
       orderBy: { createdAt: "desc" },
-      include: { user: true, assets: true },
+      include: {
+        user: true,
+        assets: true,
+        // O ciclo mais recente representa o estado "atual" a mostrar: o
+        // ciclo ACTIVE em curso, ou o último COMPLETED se não houver nenhum
+        // ativo (ex.: ONE_TIME já concluída, ou entre renovações mensais).
+        cycles: { orderBy: { createdAt: "desc" }, take: 1 },
+      },
     }),
     getLastMetaSyncAt(),
   ]);
@@ -70,7 +84,13 @@ export default async function AdminPage() {
       </div>
 
       <div className="mt-8 space-y-4">
-        {orders.map((order) => (
+        {orders.map((order) => {
+          const cycle = order.cycles[0];
+          const deliveredViews = cycle?.deliveredViews ?? order.visualizationsDelivered;
+          const targetViews = cycle?.targetViews ?? order.visualizationsPurchased;
+          const isMonthly = order.billingFrequency === "MONTHLY";
+
+          return (
           <article
             key={order.id}
             id={`order-${order.id}`}
@@ -88,16 +108,28 @@ export default async function AdminPage() {
                 </p>
                 <p className="mt-1 text-[13px] text-muted">
                   {order.zone} · {formatNumber(order.visualizationsPurchased)} visualizações ·{" "}
-                  {formatPrice(order.price)} · {formatDate(order.createdAt)}
+                  {formatPrice(order.price)}
+                  {isMonthly ? "/mês" : ""} · {FREQUENCY_LABELS[order.billingFrequency]} ·{" "}
+                  {formatDate(order.createdAt)}
                 </p>
+                {isMonthly && (
+                  <p className="mt-1 text-[13px] text-muted">
+                    Subscrição:{" "}
+                    {order.subscriptionStatus
+                      ? SUBSCRIPTION_STATUS_LABELS[order.subscriptionStatus] ?? order.subscriptionStatus
+                      : "—"}
+                    {order.cancelAtPeriodEnd && " · cancela no fim do período"}
+                    {cycle && ` · próxima renovação: ${formatDate(cycle.endsAt)}`}
+                  </p>
+                )}
               </div>
               <div className="text-right">
                 <p className="text-[20px] font-black tabular-nums">
-                  {progress(order.visualizationsDelivered, order.visualizationsPurchased)}%
+                  {progress(deliveredViews, targetViews)}%
                 </p>
                 <p className="text-[12px] text-muted">
-                  {formatNumber(order.visualizationsDelivered)} /{" "}
-                  {formatNumber(order.visualizationsPurchased)}
+                  {formatNumber(deliveredViews)} / {formatNumber(targetViews)}
+                  {isMonthly ? " (ciclo atual)" : ""}
                 </p>
                 {order.status === "PENDING_PAYMENT" && (
                   <div className="mt-2">
@@ -190,25 +222,24 @@ export default async function AdminPage() {
             <div className="mt-5 border-t border-line pt-5">
               <div className="flex items-center justify-between gap-4">
                 <h3 className="text-[13px] font-bold uppercase tracking-[0.1em] text-muted">
-                  Meta
+                  Meta {isMonthly && cycle && <span className="font-normal text-muted">· ciclo atual</span>}
                 </h3>
                 <div className="text-right">
                   <p className="text-[12px] text-muted">
                     Impressions atuais / alvo:{" "}
                     <span className="font-semibold text-ink">
-                      {formatNumber(order.visualizationsDelivered)} /{" "}
-                      {formatNumber(order.visualizationsPurchased)}
+                      {formatNumber(deliveredViews)} / {formatNumber(targetViews)}
                     </span>
                   </p>
                   <p className="mt-0.5 text-[12px] text-muted">
                     Alvo atingido:{" "}
-                    {order.targetReachedAt
-                      ? `sim (${formatDateTime(order.targetReachedAt)})`
+                    {cycle?.targetReachedAt
+                      ? `sim (${formatDateTime(cycle.targetReachedAt)})`
                       : "não"}
                   </p>
                   <p className="mt-0.5 text-[12px] text-muted">
                     Meta pausada:{" "}
-                    {order.metaPausedAt ? `sim (${formatDateTime(order.metaPausedAt)})` : "não"}
+                    {cycle?.metaPausedAt ? `sim (${formatDateTime(cycle.metaPausedAt)})` : "não"}
                   </p>
                 </div>
               </div>
@@ -219,20 +250,21 @@ export default async function AdminPage() {
                 metaCampaignId={order.metaCampaignId}
               />
 
-              {order.targetReachedAt && !order.metaPausedAt && order.metaCampaignId && (
+              {cycle?.targetReachedAt && !cycle.metaPausedAt && order.metaCampaignId && (
                 <div className="mt-3 rounded-sm border border-red-strong/30 bg-red-strong/5 p-3">
                   <p className="text-[12px] font-semibold text-red-strong">
                     Limite atingido — falha ao pausar na Meta
                   </p>
-                  {order.metaPauseLastError && (
-                    <p className="mt-1 text-[11px] text-muted">{order.metaPauseLastError}</p>
+                  {cycle.metaPauseLastError && (
+                    <p className="mt-1 text-[11px] text-muted">{cycle.metaPauseLastError}</p>
                   )}
-                  <RetryPauseButton orderId={order.id} />
+                  <RetryPauseButton cycleId={cycle.id} />
                 </div>
               )}
             </div>
           </article>
-        ))}
+          );
+        })}
 
         {orders.length === 0 && <p className="text-[15px] text-muted">Ainda não há encomendas.</p>}
       </div>

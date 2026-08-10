@@ -5,14 +5,14 @@ import {
   sendInternalNotification,
 } from "@/lib/email";
 import { getExpectedMetaCampaignName } from "@/lib/orders";
-import type { Order, User } from "@/generated/prisma/client";
+import type { DeliveryCycle, Order, User } from "@/generated/prisma/client";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 const DEFAULT_GRAPH_API_VERSION = "v21.0";
 const FETCH_TIMEOUT_MS = 8_000;
 const META_SYNC_SETTING_KEY = "metaLastSyncAt";
 
-/** Percentagem de entrega a partir da qual enviamos UM alerta interno antecipado. */
+/** Percentagem de entrega a partir da qual enviamos UM alerta interno antecipado por ciclo. */
 const NEAR_TARGET_THRESHOLD = 0.9;
 
 /** Estados em que uma campanha ainda pode estar a receber entregas da Meta. */
@@ -88,9 +88,10 @@ async function safeReadJson(response: Response): Promise<unknown> {
 }
 
 /**
- * Chamada de ESCRITA à Graph API da Meta (POST). É a única forma de escrita
- * usada em todo o `lib/meta.ts` — reservada exclusivamente para pausar
- * campanhas (`pauseMetaCampaign`). Nunca regista o access token em logs.
+ * Chamada de ESCRITA à Graph API da Meta (POST). Usada exclusivamente para
+ * pausar (`pauseMetaCampaign`) e reativar (`resumeMetaCampaign`) campanhas —
+ * nunca para alterar orçamento, targeting, ad sets, ads ou creatives. Nunca
+ * regista o access token em logs.
  */
 async function metaGraphPost(path: string, params: Record<string, string>): Promise<unknown> {
   const accessToken = requireAccessToken();
@@ -134,18 +135,17 @@ async function metaGraphPost(path: string, params: Record<string, string>): Prom
   return payload;
 }
 
-export type PauseCampaignResult = { ok: boolean; error?: string };
+export type MetaWriteResult = { ok: boolean; error?: string };
 
 /**
- * Pausa uma campanha Meta (`POST /{campaignId}` com `status=PAUSED`) — a
- * ÚNICA operação de escrita permitida nesta integração. Nunca altera
- * orçamento, targeting, ad sets, ads ou creatives.
+ * Pausa uma campanha Meta (`POST /{campaignId}` com `status=PAUSED`).
+ * Nunca altera orçamento, targeting, ad sets, ads ou creatives.
  *
  * Idempotente: pausar uma campanha já pausada é um pedido válido para a
  * própria Graph API (não falha), por isso não fazemos nenhuma verificação
  * prévia de estado — simplifica o código e evita uma chamada extra.
  */
-export async function pauseMetaCampaign(campaignId: string): Promise<PauseCampaignResult> {
+export async function pauseMetaCampaign(campaignId: string): Promise<MetaWriteResult> {
   try {
     await metaGraphPost(`/${campaignId}`, { status: "PAUSED" });
     return { ok: true };
@@ -155,13 +155,42 @@ export async function pauseMetaCampaign(campaignId: string): Promise<PauseCampai
 }
 
 /**
+ * Reativa (`status=ACTIVE`) a campanha Meta principal de uma Order no início
+ * de um novo ciclo de entrega mensal — usada apenas quando o ciclo anterior
+ * tiver sido pausado por nós especificamente por ter atingido o alvo
+ * (`TARGET_REACHED`). Idempotente da mesma forma que `pauseMetaCampaign`.
+ */
+export async function resumeMetaCampaign(campaignId: string): Promise<MetaWriteResult> {
+  try {
+    await metaGraphPost(`/${campaignId}`, { status: "ACTIVE" });
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : "Erro desconhecido" };
+  }
+}
+
+function toDateOnly(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+/**
  * Consulta a Meta Ads Insights API para uma campanha, ad set ou anúncio e
  * devolve o total de "impressions" (não "reach" — na Aqui. "visualizações"
- * corresponde a impressions). Funciona com qualquer node id, porque a edge
- * `/insights` tem o mesmo formato em campaign/adset/ad.
+ * corresponde a impressions) DENTRO da janela `[since, hoje]`.
+ *
+ * Usa o `time_range` oficial da Insights API em vez de subtrair um baseline
+ * lifetime: como a mesma campanha Meta é reutilizada em todos os ciclos de
+ * uma subscrição mensal (e fica pausada entre ciclos, sem entrega no
+ * intervalo), isto conta exatamente as impressions do ciclo atual, sem
+ * risco de dupla contagem entre meses. Granularidade ao dia (não ao
+ * segundo) — aceitável dado que a campanha não recebe entregas fora do
+ * ciclo.
  */
-export async function fetchMetaImpressions(objectId: string): Promise<number> {
-  const payload = await metaGraphGet(`/${objectId}/insights`, { fields: "impressions" });
+export async function fetchMetaImpressions(objectId: string, since: Date): Promise<number> {
+  const payload = await metaGraphGet(`/${objectId}/insights`, {
+    fields: "impressions",
+    time_range: JSON.stringify({ since: toDateOnly(since), until: toDateOnly(new Date()) }),
+  });
 
   const rows = (payload as { data?: Array<{ impressions?: string }> } | null)?.data;
   const impressionsRaw = rows?.[0]?.impressions;
@@ -258,7 +287,9 @@ function campaignDashboardLink(orderId: string): string {
  * nome esperado, ou escolhida manualmente no admin). Guarda o ad set e o
  * anúncio "principal" (primeiro encontrado) apenas para efeitos de
  * pré-visualização — a sincronização de impressions passa a usar sempre o
- * `metaCampaignId` (nível de campanha), nunca precisa destes IDs.
+ * `metaCampaignId` (nível de campanha), nunca precisa destes IDs. A
+ * campanha é sempre a "principal" da Order, reutilizada em todos os ciclos
+ * de entrega (nunca associada por ciclo).
  *
  * Dispara também o email "A sua campanha já está ativa" ao cliente — UMA
  * única vez por encomenda, mesmo que a campanha seja reassociada depois.
@@ -306,98 +337,110 @@ async function sendActivationEmailOnce(order: Order & { user: User }, adCount: n
   }
 }
 
+type OrderWithUser = Order & { user: User };
+
 /**
- * Aplica um novo valor de visualizações (impressions) vindo da Meta a uma
- * encomenda.
+ * Aplica um novo valor de visualizações (impressions) vindo da Meta a UM
+ * ciclo de entrega específico (`DeliveryCycle`) — nunca à Order
+ * diretamente, para que ciclos mensais sucessivos não somem indefinidamente
+ * sobre o mesmo total.
  *
- * - `visualizationsDelivered` nunca desce: se a Meta devolver temporariamente
- *   um valor inferior ao já registado, mantém-se o maior valor conhecido.
- * - `visualizationsDelivered` fica sempre limitado a `visualizationsPurchased`
- *   (o progresso no painel nunca passa de 100%).
+ * - `deliveredViews` nunca desce dentro do mesmo ciclo: se a Meta devolver
+ *   temporariamente um valor inferior ao já registado, mantém-se o maior
+ *   valor conhecido.
+ * - `deliveredViews` fica sempre limitado a `targetViews` do ciclo (o
+ *   progresso no painel nunca passa de 100% do ciclo atual).
+ * - `order.visualizationsDelivered` é atualizado como CACHE do ciclo atual,
+ *   para listagens simples (admin/painel) não precisarem de juntar tabelas.
  * - O valor "em bruto" devolvido pela Meta fica registado no histórico
- *   (`CampaignUpdate`) para auditoria, mesmo que seja maior que o comprado.
- * - Aos 90% do alvo, envia UM alerta interno antecipado (não pausa nada).
- * - Ao atingir o alvo pela primeira vez, guarda `targetReachedAt` e envia UMA
- *   notificação interna.
+ *   (`CampaignUpdate`, com `cycleId`) para auditoria, mesmo que seja maior
+ *   que o alvo do ciclo.
+ * - Aos 90% do alvo do ciclo, envia UM alerta interno antecipado (não pausa
+ *   nada).
+ * - Ao atingir o alvo do ciclo pela primeira vez, guarda `targetReachedAt`
+ *   (no ciclo) e envia UMA notificação interna.
  * - Sempre que o alvo já foi atingido mas a campanha ainda não está pausada
- *   (`targetReachedAt` definido e `metaPausedAt` ainda `null`), tenta pausar
- *   a campanha Meta — isto cobre tanto o momento em que o alvo é atingido
- *   agora, como retries automáticos de falhas de pausa em syncs anteriores.
+ *   (`targetReachedAt` definido e `metaPausedAt` ainda `null` no ciclo),
+ *   tenta pausar a campanha Meta — cobre tanto o momento em que o alvo é
+ *   atingido agora, como retries automáticos de falhas de pausa em syncs
+ *   anteriores.
  *
  * Pensada para ser chamada tanto pela sincronização automática
  * (`syncActiveCampaigns`) como pelo botão manual no `/admin`.
  */
-export async function applyDeliveredViews(orderId: string, metaImpressions: number) {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { user: true },
+export async function applyDeliveredViews(cycleId: string, metaImpressions: number) {
+  const cycle = await prisma.deliveryCycle.findUnique({
+    where: { id: cycleId },
+    include: { order: { include: { user: true } } },
   });
-  if (!order) return null;
+  if (!cycle) return null;
+  if (cycle.status !== "ACTIVE") return cycle; // já concluído — nada a fazer.
+
+  const order: OrderWithUser = cycle.order;
 
   const rawValue = Math.max(0, Math.round(metaImpressions));
-  const cappedValue = order.visualizationsPurchased > 0
-    ? Math.min(rawValue, order.visualizationsPurchased)
-    : rawValue;
-  const displayValue = Math.max(order.visualizationsDelivered, cappedValue);
+  const cappedValue =
+    cycle.targetViews > 0 ? Math.min(rawValue, cycle.targetViews) : rawValue;
+  const displayValue = Math.max(cycle.deliveredViews, cappedValue);
 
   const justReachedTarget =
-    !order.targetReachedAt &&
-    order.visualizationsPurchased > 0 &&
-    displayValue >= order.visualizationsPurchased;
+    !cycle.targetReachedAt && cycle.targetViews > 0 && displayValue >= cycle.targetViews;
 
   const justCrossedNearTarget =
-    !order.nearTargetNotifiedAt &&
+    !cycle.nearTargetNotifiedAt &&
     !justReachedTarget &&
-    !order.targetReachedAt &&
-    order.visualizationsPurchased > 0 &&
-    displayValue / order.visualizationsPurchased >= NEAR_TARGET_THRESHOLD;
+    !cycle.targetReachedAt &&
+    cycle.targetViews > 0 &&
+    displayValue / cycle.targetViews >= NEAR_TARGET_THRESHOLD;
 
-  const updated = await prisma.$transaction(async (tx) => {
-    const next = await tx.order.update({
-      where: { id: orderId },
+  const updatedCycle = await prisma.$transaction(async (tx) => {
+    const next = await tx.deliveryCycle.update({
+      where: { id: cycleId },
       data: {
-        visualizationsDelivered: displayValue,
+        deliveredViews: displayValue,
         ...(justReachedTarget ? { targetReachedAt: new Date() } : {}),
         ...(justCrossedNearTarget ? { nearTargetNotifiedAt: new Date() } : {}),
       },
-      include: { user: true },
     });
-    // Guarda o valor em bruto devolvido pela Meta (auditoria), não o valor
-    // já limitado usado para o progresso apresentado.
+    await tx.order.update({
+      where: { id: order.id },
+      data: { visualizationsDelivered: displayValue },
+    });
     await tx.campaignUpdate.create({
-      data: { orderId, visualizationsDelivered: rawValue },
+      data: { orderId: order.id, cycleId, visualizationsDelivered: rawValue },
     });
     return next;
   });
 
   if (justCrossedNearTarget) {
-    await notifyNearTarget(updated.user, updated);
+    await notifyNearTarget(order.user, order, updatedCycle);
   }
 
   if (justReachedTarget) {
-    await notifyTargetReached(updated.user, updated);
+    await notifyTargetReached(order.user, order, updatedCycle);
   }
 
   // Tenta pausar (e concluir) sempre que o alvo já está atingido mas a
   // pausa ainda não foi confirmada — cobre o caso atual e retries.
-  if (updated.targetReachedAt && !updated.metaPausedAt && updated.metaCampaignId) {
-    await tryPauseAndComplete(updated);
+  if (updatedCycle.targetReachedAt && !updatedCycle.metaPausedAt && order.metaCampaignId) {
+    await tryPauseAndComplete(updatedCycle, order);
   }
 
-  return updated;
+  return updatedCycle;
 }
 
-async function notifyNearTarget(user: User, order: Order): Promise<void> {
+async function notifyNearTarget(user: User, order: Order, cycle: DeliveryCycle): Promise<void> {
   try {
     await sendInternalNotification(
       "Campanha a aproximar-se do limite — Aqui.",
       [
         `Encomenda: ${order.id}`,
+        `Ciclo: ${cycle.id}`,
         `Cliente: ${user.companyName} (${user.email})`,
         `Zona: ${order.zone}`,
-        `Visualizações compradas: ${order.visualizationsPurchased}`,
-        `Visualizações Meta atuais: ${order.visualizationsDelivered}`,
-        `(${Math.round((order.visualizationsDelivered / order.visualizationsPurchased) * 100)}% do alvo)`,
+        `Visualizações compradas (ciclo): ${cycle.targetViews}`,
+        `Visualizações Meta atuais (ciclo): ${cycle.deliveredViews}`,
+        `(${Math.round((cycle.deliveredViews / cycle.targetViews) * 100)}% do alvo)`,
         "",
         "Apenas informativo — a pausa automática só acontece ao atingir 100%.",
       ].join("\n"),
@@ -407,7 +450,7 @@ async function notifyNearTarget(user: User, order: Order): Promise<void> {
   }
 }
 
-async function notifyTargetReached(user: User, order: Order): Promise<void> {
+async function notifyTargetReached(user: User, order: Order, cycle: DeliveryCycle): Promise<void> {
   const adminLink = adminOrderLink(order.id);
 
   try {
@@ -415,13 +458,12 @@ async function notifyTargetReached(user: User, order: Order): Promise<void> {
       "Campanha atingiu o limite — Aqui.",
       [
         `Encomenda: ${order.id}`,
+        `Ciclo: ${cycle.id}`,
         `Cliente: ${user.companyName} (${user.email})`,
         `Zona: ${order.zone}`,
-        `Visualizações compradas: ${order.visualizationsPurchased}`,
-        `Visualizações Meta atuais: ${order.visualizationsDelivered}`,
+        `Visualizações compradas (ciclo): ${cycle.targetViews}`,
+        `Visualizações Meta atuais (ciclo): ${cycle.deliveredViews}`,
         order.metaCampaignId ? `Meta Campaign ID: ${order.metaCampaignId}` : null,
-        order.metaAdSetId ? `Meta Ad Set ID: ${order.metaAdSetId}` : null,
-        order.metaAdId ? `Meta Ad ID: ${order.metaAdId}` : null,
         adminLink ? `Ver no admin: ${adminLink}` : null,
         "",
         order.metaCampaignId
@@ -442,85 +484,113 @@ function adminOrderLink(orderId: string): string | null {
 }
 
 /**
- * Tenta pausar a campanha Meta de uma encomenda cujo alvo já foi atingido, e
- * concluir o fluxo (status `COMPLETED`, email interno, email ao cliente) só
- * depois de a Meta confirmar a pausa. Nunca pausa encomendas canceladas,
- * reembolsadas, já concluídas ou sem `metaCampaignId` — chamada apenas
- * quando essas condições já foram validadas por quem invoca esta função.
+ * Tenta pausar a campanha Meta principal de uma Order cujo ciclo atual já
+ * atingiu o alvo, e concluir o fluxo (ciclo `COMPLETED`, email interno,
+ * email ao cliente) só depois de a Meta confirmar a pausa. Nunca pausa
+ * encomendas canceladas, reembolsadas, já concluídas ou sem
+ * `metaCampaignId` — chamada apenas quando essas condições já foram
+ * validadas por quem invoca esta função.
  *
- * Se a pausa falhar: não marca como concluída, mantém `targetReachedAt`,
- * regista o erro em `metaPauseLastError` e envia um email interno de falha —
- * a tentativa repete-se automaticamente no próximo sync (`applyDeliveredViews`)
- * ou manualmente pelo botão "Tentar pausar novamente" no `/admin`.
+ * Para encomendas `ONE_TIME`, marca também `Order.status = COMPLETED`; para
+ * `MONTHLY`, só o `DeliveryCycle` é concluído — a Order/subscrição continua
+ * ativa para a próxima renovação.
+ *
+ * Se a pausa falhar: não marca como concluído, mantém `targetReachedAt` no
+ * ciclo, regista o erro em `metaPauseLastError` e envia um email interno de
+ * falha — a tentativa repete-se automaticamente no próximo sync
+ * (`applyDeliveredViews`) ou manualmente pelo botão "Tentar pausar
+ * novamente" no `/admin`.
  */
-async function tryPauseAndComplete(order: Order & { user: User }): Promise<void> {
+async function tryPauseAndComplete(cycle: DeliveryCycle, order: OrderWithUser): Promise<void> {
   // Defesa extra: nunca pausar encomendas canceladas, reembolsadas, já
-  // concluídas ou sem campanha associada, mesmo que chamada diretamente
-  // (ex.: `retryMetaPause`) em vez de vir do fluxo normal de sync.
+  // concluídas, sem campanha associada ou ciclos já concluídos, mesmo que
+  // chamada diretamente (ex.: `retryMetaPause`) em vez de vir do fluxo
+  // normal de sync.
   if (!order.metaCampaignId) return;
   if (!SYNCABLE_STATUSES.includes(order.status)) return;
+  if (cycle.status !== "ACTIVE") return;
 
   const result = await pauseMetaCampaign(order.metaCampaignId);
 
   if (!result.ok) {
     console.error(
-      `[meta] falha ao pausar a campanha ${order.metaCampaignId} (encomenda ${order.id}): ${result.error}`,
+      `[meta] falha ao pausar a campanha ${order.metaCampaignId} (ciclo ${cycle.id}): ${result.error}`,
     );
-    await prisma.order.update({
-      where: { id: order.id },
+    await prisma.deliveryCycle.update({
+      where: { id: cycle.id },
       data: { metaPauseLastError: result.error ?? "Erro desconhecido" },
     });
-    await notifyPauseFailed(order.user, order, result.error);
+    await notifyPauseFailed(order.user, order, cycle, result.error);
     return;
   }
 
-  const completed = await prisma.order.update({
-    where: { id: order.id },
-    data: {
-      metaPausedAt: new Date(),
-      metaPauseReason: "TARGET_REACHED",
-      metaPauseLastError: null,
-      status: "COMPLETED",
-    },
-    include: { user: true },
+  const now = new Date();
+  const completedCycle = await prisma.$transaction(async (tx) => {
+    const updated = await tx.deliveryCycle.update({
+      where: { id: cycle.id },
+      data: {
+        metaPausedAt: now,
+        metaPauseReason: "TARGET_REACHED",
+        metaPauseLastError: null,
+        status: "COMPLETED",
+        completedAt: now,
+      },
+    });
+
+    if (order.billingFrequency === "ONE_TIME") {
+      await tx.order.update({ where: { id: order.id }, data: { status: "COMPLETED" } });
+    }
+
+    return updated;
   });
 
-  await notifyPauseConfirmed(completed.user, completed);
-  await sendCompletionEmailOnce(completed);
+  await notifyPauseConfirmed(order.user, order, completedCycle);
+  await sendCompletionEmailOnce(order, completedCycle);
 }
 
 /**
- * Repete manualmente a tentativa de pausa para uma encomenda cujo alvo já
- * foi atingido mas cuja pausa ainda não foi confirmada — usada pelo botão
+ * Repete manualmente a tentativa de pausa para um ciclo cujo alvo já foi
+ * atingido mas cuja pausa ainda não foi confirmada — usada pelo botão
  * "Tentar pausar novamente" no `/admin`.
  */
-export async function retryMetaPause(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({ where: { id: orderId }, include: { user: true } });
-  if (!order) throw new Error("Encomenda não encontrada.");
-  if (!order.targetReachedAt) throw new Error("Esta encomenda ainda não atingiu o alvo.");
-  if (order.metaPausedAt) return; // já está pausada, nada a fazer
+export async function retryMetaPause(cycleId: string): Promise<void> {
+  const cycle = await prisma.deliveryCycle.findUnique({
+    where: { id: cycleId },
+    include: { order: { include: { user: true } } },
+  });
+  if (!cycle) throw new Error("Ciclo não encontrado.");
+  if (!cycle.targetReachedAt) throw new Error("Este ciclo ainda não atingiu o alvo.");
+  if (cycle.metaPausedAt) return; // já está pausado, nada a fazer
+
+  const order = cycle.order;
   if (!order.metaCampaignId) throw new Error("Esta encomenda não tem campanha Meta associada.");
   if (!SYNCABLE_STATUSES.includes(order.status)) {
     throw new Error("Esta encomenda já não está num estado em que possa ser pausada.");
   }
 
-  await tryPauseAndComplete(order);
+  await tryPauseAndComplete(cycle, order);
 }
 
-async function notifyPauseFailed(user: User, order: Order, error?: string): Promise<void> {
+async function notifyPauseFailed(
+  user: User,
+  order: Order,
+  cycle: DeliveryCycle,
+  error?: string,
+): Promise<void> {
   const adminLink = adminOrderLink(order.id);
   try {
     await sendInternalNotification(
       "Limite atingido — falha ao pausar na Meta — Aqui.",
       [
         `Encomenda: ${order.id}`,
+        `Ciclo: ${cycle.id}`,
         `Cliente: ${user.companyName} (${user.email})`,
         `Zona: ${order.zone}`,
         `Meta Campaign ID: ${order.metaCampaignId}`,
         `Erro: ${error ?? "desconhecido"}`,
         adminLink ? `Ver no admin: ${adminLink}` : null,
         "",
-        "A encomenda mantém-se ativa — vamos tentar pausar de novo no próximo sync, ou use \"Tentar pausar novamente\" no /admin.",
+        "A entrega mantém-se ativa — vamos tentar pausar de novo no próximo sync, ou use \"Tentar pausar novamente\" no /admin.",
       ]
         .filter((line): line is string => line !== null)
         .join("\n"),
@@ -530,17 +600,18 @@ async function notifyPauseFailed(user: User, order: Order, error?: string): Prom
   }
 }
 
-async function notifyPauseConfirmed(user: User, order: Order): Promise<void> {
+async function notifyPauseConfirmed(user: User, order: Order, cycle: DeliveryCycle): Promise<void> {
   const adminLink = adminOrderLink(order.id);
   try {
     await sendInternalNotification(
-      "Campanha pausada e concluída — Aqui.",
+      "Campanha pausada e ciclo concluído — Aqui.",
       [
         `Encomenda: ${order.id}`,
+        `Ciclo: ${cycle.id}`,
         `Cliente: ${user.companyName} (${user.email})`,
         `Zona: ${order.zone}`,
-        `Visualizações compradas: ${order.visualizationsPurchased}`,
-        `Visualizações entregues: ${order.visualizationsDelivered}`,
+        `Visualizações compradas (ciclo): ${cycle.targetViews}`,
+        `Visualizações entregues (ciclo): ${cycle.deliveredViews}`,
         `Meta Campaign ID: ${order.metaCampaignId}`,
         adminLink ? `Ver no admin: ${adminLink}` : null,
       ]
@@ -552,25 +623,25 @@ async function notifyPauseConfirmed(user: User, order: Order): Promise<void> {
   }
 }
 
-async function sendCompletionEmailOnce(order: Order & { user: User }): Promise<void> {
-  if (order.completionEmailSentAt) return;
+async function sendCompletionEmailOnce(order: OrderWithUser, cycle: DeliveryCycle): Promise<void> {
+  if (cycle.completionEmailSentAt) return;
 
   try {
     await sendCampaignCompletedEmail(order.user.email, {
       companyName: order.user.companyName,
       zone: order.zone,
-      purchased: order.visualizationsPurchased,
-      delivered: order.visualizationsDelivered,
+      purchased: cycle.targetViews,
+      delivered: cycle.deliveredViews,
       dashboardLink: campaignDashboardLink(order.id),
     });
-    await prisma.order.update({
-      where: { id: order.id },
+    await prisma.deliveryCycle.update({
+      where: { id: cycle.id },
       data: { completionEmailSentAt: new Date() },
     });
   } catch (error) {
     // Falha a enviar o email nunca deve desfazer a pausa/conclusão já confirmadas.
     console.error(
-      `[meta] falha ao enviar email de conclusão ao cliente (encomenda ${order.id}):`,
+      `[meta] falha ao enviar email de conclusão ao cliente (ciclo ${cycle.id}):`,
       error instanceof Error ? error.message : error,
     );
   }
@@ -613,12 +684,34 @@ async function autoAssociateEligibleOrders(): Promise<void> {
 }
 
 /**
+ * Se a renovação anterior (`invoice.paid`) tentou reativar a campanha Meta e
+ * falhou (`metaPauseLastError` presente e `metaResumedAt` ainda nulo), tenta
+ * de novo antes de ler impressions deste sync — idempotente da mesma forma
+ * que `resumeMetaCampaign`.
+ */
+async function maybeResumeBeforeSync(order: Order, cycle: DeliveryCycle): Promise<void> {
+  if (!order.metaCampaignId) return;
+  if (cycle.metaResumedAt) return;
+  if (!cycle.metaPauseLastError) return;
+
+  const result = await resumeMetaCampaign(order.metaCampaignId);
+
+  await prisma.deliveryCycle.update({
+    where: { id: cycle.id },
+    data: result.ok
+      ? { metaResumedAt: new Date(), metaPauseLastError: null }
+      : { metaPauseLastError: result.error ?? "Erro desconhecido" },
+  });
+}
+
+/**
  * Percorre campanhas elegíveis (pagas, em revisão ou ativas — nunca
  * concluídas, rejeitadas ou reembolsadas), tenta primeiro auto-associar as
  * que ainda não têm `metaCampaignId` pelo nome esperado, e depois sincroniza
- * as impressions ao nível da campanha (ou do anúncio, para encomendas
- * antigas só com `metaAdId`). Uma falha numa encomenda nunca impede as
- * restantes de serem sincronizadas.
+ * as impressions do ciclo de entrega ATIVO mais recente de cada encomenda
+ * (ao nível da campanha, ou do anúncio, para encomendas antigas só com
+ * `metaAdId`). Uma falha numa encomenda nunca impede as restantes de serem
+ * sincronizadas.
  *
  * Chamada tanto pelo cron (`/api/cron/meta-sync`) como pelo botão manual
  * "Sincronizar Meta" no `/admin`.
@@ -631,20 +724,35 @@ export async function syncActiveCampaigns(): Promise<MetaSyncResult[]> {
       status: { in: SYNCABLE_STATUSES },
       OR: [{ metaCampaignId: { not: null } }, { metaAdId: { not: null } }],
     },
+    include: {
+      cycles: {
+        where: { status: "ACTIVE" },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+    },
   });
 
   const results: MetaSyncResult[] = [];
 
   for (const order of orders) {
+    const cycle = order.cycles[0];
+
+    // Sem ciclo ativo (ex.: subscrição entre o fim de um ciclo e o
+    // `invoice.paid` da renovação seguinte) — nada para sincronizar agora.
+    if (!cycle) continue;
+
     try {
+      await maybeResumeBeforeSync(order, cycle);
+
       // Preferir sempre o nível de campanha (agrega todos os ad sets/ads
       // sem risco de dupla contagem); só recorre ao ad isolado para
       // encomendas antigas que nunca chegaram a ter `metaCampaignId`.
       const objectId = order.metaCampaignId ?? order.metaAdId!;
-      const impressions = await fetchMetaImpressions(objectId);
-      await applyDeliveredViews(order.id, impressions);
+      const impressions = await fetchMetaImpressions(objectId, cycle.startsAt);
+      await applyDeliveredViews(cycle.id, impressions);
       results.push({ orderId: order.id, ok: true });
-      console.info(`[meta] sincronizada encomenda ${order.id}`);
+      console.info(`[meta] sincronizada encomenda ${order.id} (ciclo ${cycle.id})`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Erro desconhecido";
       console.error(`[meta] falha ao sincronizar encomenda ${order.id}: ${message}`);

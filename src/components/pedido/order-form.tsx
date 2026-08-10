@@ -3,9 +3,18 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Check, Close, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { PACKS, getPack, type PackId } from "@/lib/packs";
+import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
+import {
+  MAX_VIEWS,
+  MIN_VIEWS,
+  VIEWS_STEP,
+  calculatePrice,
+  clampViews,
+  type BillingFrequency,
+} from "@/lib/pricing";
 import { NATIONAL_ZONE, ZONES } from "@/lib/zones";
+import { FREQUENCY_LABELS } from "@/lib/orders";
 import {
   ACCEPT_ATTRIBUTE,
   MAX_ASSETS,
@@ -16,7 +25,7 @@ import {
 } from "@/lib/assets";
 import { track } from "@/lib/analytics";
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 6;
 
 type AssetStatus = "uploading" | "done" | "error";
 
@@ -36,6 +45,7 @@ const STEP_TITLES = [
   "Onde quer aparecer?",
   "Envie as suas fotos ou vídeos",
   "Quantas visualizações quer?",
+  "Como quer anunciar?",
   "Os seus dados",
   "Resumo",
 ];
@@ -82,11 +92,19 @@ async function uploadFile(
   return { url: data.url as string, pathname: (data.pathname as string | undefined) ?? "" };
 }
 
-export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
+export function OrderForm({
+  initialViews,
+  initialCustom,
+}: {
+  initialViews: number | null;
+  initialCustom: boolean;
+}) {
   const [step, setStep] = useState(1);
   const [zone, setZone] = useState("");
   const [assets, setAssets] = useState<AssetItem[]>([]);
-  const [packId, setPackId] = useState<PackId | null>(initialPack);
+  const [views, setViews] = useState<number | null>(initialViews);
+  const [customVolume, setCustomVolume] = useState(initialCustom);
+  const [frequency, setFrequency] = useState<BillingFrequency | null>(null);
   const [contact, setContact] = useState({ name: "", companyName: "", email: "", phone: "" });
 
   const [submitting, setSubmitting] = useState(false);
@@ -94,7 +112,11 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
 
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllers = useRef(new Map<string, AbortController>());
-  const pack = useMemo(() => getPack(packId), [packId]);
+
+  const oneTimePrice = useMemo(() => (views ? calculatePrice(views, "ONE_TIME") : 0), [views]);
+  const monthlyPrice = useMemo(() => (views ? calculatePrice(views, "MONTHLY") : 0), [views]);
+  const monthlySavings = Math.max(0, oneTimePrice - monthlyPrice);
+  const totalPrice = frequency ? (frequency === "ONE_TIME" ? oneTimePrice : monthlyPrice) : 0;
 
   const doneAssets = useMemo(() => assets.filter((asset) => asset.status === "done"), [assets]);
   const hasPendingUploads = useMemo(
@@ -217,8 +239,9 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
     if (step === 1 && !zone) return "Escolha a zona onde quer aparecer.";
     if (step === 2 && doneAssets.length === 0) return "Envie pelo menos uma foto ou vídeo.";
     if (step === 2 && hasPendingUploads) return "Aguarde a conclusão dos uploads.";
-    if (step === 3 && !packId) return "Escolha as visualizações que quer comprar.";
-    if (step === 4) {
+    if (step === 3 && !views) return "Escolha as visualizações que quer comprar.";
+    if (step === 4 && !frequency) return "Escolha como quer anunciar.";
+    if (step === 5) {
       if (contact.name.trim().length < 2) return "Indique o seu nome.";
       if (contact.companyName.trim().length < 2) return "Indique o nome da empresa.";
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(contact.email)) return "Email inválido.";
@@ -244,7 +267,7 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
   }
 
   async function submit() {
-    if (!pack) return;
+    if (!views || !frequency) return;
     if (hasPendingUploads) {
       setError("Aguarde a conclusão dos uploads.");
       return;
@@ -258,7 +281,8 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           zone,
-          packId: pack.id,
+          views,
+          billingFrequency: frequency,
           // Só pathname/url/tipo do ficheiro chegam ao pedido — nada de blob
           // metadata extra nem o conteúdo do ficheiro em si.
           assets: doneAssets.map(({ url, fileType }) => ({ url, fileType })),
@@ -446,12 +470,15 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
 
             <div className="mt-8 space-y-3">
               {PACKS.map((option) => {
-                const selected = packId === option.id;
+                const selected = !customVolume && views === option.visualizations;
                 return (
                   <button
                     key={option.id}
                     type="button"
-                    onClick={() => setPackId(option.id)}
+                    onClick={() => {
+                      setCustomVolume(false);
+                      setViews(option.visualizations);
+                    }}
                     className={`flex w-full items-center justify-between rounded-md border p-5 text-left transition-colors ${
                       selected ? "border-red-strong bg-red-strong/[0.03]" : "border-line hover:border-line-strong"
                     }`}
@@ -477,11 +504,141 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
                   </button>
                 );
               })}
+
+              <button
+                type="button"
+                onClick={() => {
+                  setCustomVolume(true);
+                  setViews((current) => clampViews(current ?? 20_000));
+                }}
+                className={`flex w-full items-center justify-between rounded-md border p-5 text-left transition-colors ${
+                  customVolume ? "border-red-strong bg-red-strong/[0.03]" : "border-line hover:border-line-strong"
+                }`}
+              >
+                <span className="text-[15px] font-semibold">Outro volume</span>
+                <span
+                  className={`grid size-5 place-items-center rounded-full border ${
+                    customVolume ? "border-red-strong bg-red-strong text-white" : "border-line-strong"
+                  }`}
+                >
+                  {customVolume && <Check className="size-3" />}
+                </span>
+              </button>
+
+              {customVolume && (
+                <div className="rounded-md border border-line bg-surface p-5">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="custom-views" className="text-[13px] font-semibold">
+                      Visualizações
+                    </label>
+                    <span className="text-[20px] font-black tabular-nums">
+                      {formatNumber(views ?? MIN_VIEWS)}
+                    </span>
+                  </div>
+                  <input
+                    id="custom-views"
+                    type="range"
+                    min={MIN_VIEWS}
+                    max={MAX_VIEWS}
+                    step={VIEWS_STEP}
+                    value={views ?? MIN_VIEWS}
+                    onChange={(event) => setViews(Number(event.target.value))}
+                    className="mt-4 h-2 w-full cursor-pointer accent-red-strong"
+                  />
+                  <div className="mt-4 flex items-center gap-3">
+                    <input
+                      type="number"
+                      min={MIN_VIEWS}
+                      max={MAX_VIEWS}
+                      step={VIEWS_STEP}
+                      value={views ?? MIN_VIEWS}
+                      onChange={(event) => setViews(Number(event.target.value) || MIN_VIEWS)}
+                      onBlur={(event) => setViews(clampViews(Number(event.target.value) || MIN_VIEWS))}
+                      className="h-11 w-full rounded-md border border-line-strong bg-white px-4 text-[15px] outline-none focus:border-ink"
+                    />
+                    <span className="shrink-0 text-[13px] text-muted">
+                      entre {formatNumber(MIN_VIEWS)} e {formatNumber(MAX_VIEWS)}
+                    </span>
+                  </div>
+                  <p className="mt-4 text-[15px] font-bold">
+                    {formatPrice(oneTimePrice)} uma vez · {formatPrice(monthlyPrice)}/mês
+                  </p>
+                </div>
+              )}
             </div>
           </section>
         )}
 
-        {step === 4 && (
+        {step === 4 && views && (
+          <section>
+            <h1 className="text-[26px] font-black leading-tight sm:text-[32px]">
+              Como quer anunciar?
+            </h1>
+            <p className="mt-3 text-[15px] text-muted">
+              Escolha se prefere pagar uma vez ou todos os meses para {formatNumber(views)}{" "}
+              visualizações.
+            </p>
+
+            <div className="mt-8 space-y-3">
+              <button
+                type="button"
+                onClick={() => setFrequency("ONE_TIME")}
+                className={`flex w-full items-center justify-between rounded-md border p-5 text-left transition-colors ${
+                  frequency === "ONE_TIME"
+                    ? "border-red-strong bg-red-strong/[0.03]"
+                    : "border-line hover:border-line-strong"
+                }`}
+              >
+                <span className="block text-[16px] font-semibold">Uma vez</span>
+                <span className="flex items-center gap-3">
+                  <span className="text-[20px] font-black">{formatPrice(oneTimePrice)}</span>
+                  <span
+                    className={`grid size-5 place-items-center rounded-full border ${
+                      frequency === "ONE_TIME"
+                        ? "border-red-strong bg-red-strong text-white"
+                        : "border-line-strong"
+                    }`}
+                  >
+                    {frequency === "ONE_TIME" && <Check className="size-3" />}
+                  </span>
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setFrequency("MONTHLY")}
+                className={`flex w-full items-center justify-between rounded-md border p-5 text-left transition-colors ${
+                  frequency === "MONTHLY"
+                    ? "border-red-strong bg-red-strong/[0.03]"
+                    : "border-line hover:border-line-strong"
+                }`}
+              >
+                <span>
+                  <span className="block text-[16px] font-semibold">Todos os meses</span>
+                  {monthlySavings > 0 && (
+                    <span className="mt-1 block text-[12px] text-muted">
+                      Poupa {formatPrice(monthlySavings)} por mês
+                    </span>
+                  )}
+                </span>
+                <span className="flex items-center gap-3">
+                  <span className="text-[20px] font-black">{formatPrice(monthlyPrice)}/mês</span>
+                  <span
+                    className={`grid size-5 place-items-center rounded-full border ${
+                      frequency === "MONTHLY"
+                        ? "border-red-strong bg-red-strong text-white"
+                        : "border-line-strong"
+                    }`}
+                  >
+                    {frequency === "MONTHLY" && <Check className="size-3" />}
+                  </span>
+                </span>
+              </button>
+            </div>
+          </section>
+        )}
+
+        {step === 5 && (
           <section>
             <h1 className="text-[26px] font-black leading-tight sm:text-[32px]">Os seus dados</h1>
             <p className="mt-3 text-[15px] text-muted">
@@ -522,7 +679,7 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
           </section>
         )}
 
-        {step === 5 && pack && (
+        {step === 6 && views && frequency && (
           <section>
             <h1 className="text-[26px] font-black leading-tight sm:text-[32px]">
               Resumo da campanha
@@ -531,19 +688,25 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
             <dl className="mt-8 border-t border-line">
               <SummaryRow label="Zona" value={zone} />
               <SummaryRow label="Ficheiros enviados" value={`${doneAssets.length}`} />
-              <SummaryRow
-                label="Visualizações"
-                value={formatNumber(pack.visualizations)}
-              />
+              <SummaryRow label="Visualizações" value={formatNumber(views)} />
+              <SummaryRow label="Frequência" value={FREQUENCY_LABELS[frequency]} />
             </dl>
 
             <div className="mt-6 flex items-end justify-between">
-              <span className="text-[14px] text-muted">Total</span>
+              <span className="text-[14px] text-muted">
+                {frequency === "MONTHLY" ? "Total por mês" : "Total"}
+              </span>
               <span className="text-[32px] font-black tracking-[-0.04em]">
-                {formatPrice(pack.price)}
+                {formatPrice(totalPrice)}
+                {frequency === "MONTHLY" && <span className="text-[16px]">/mês</span>}
               </span>
             </div>
             <p className="mt-1 text-right text-[12px] text-muted">IVA incluído</p>
+            {frequency === "MONTHLY" && (
+              <p className="mt-4 text-[13px] text-muted">
+                Renova todos os meses. Pode cancelar quando quiser.
+              </p>
+            )}
 
             <div className="mt-6 flex gap-3 overflow-x-auto pb-1">
               {doneAssets.map((asset) => (

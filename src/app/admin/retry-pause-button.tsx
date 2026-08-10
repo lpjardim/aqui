@@ -16,12 +16,12 @@ function SubmitButton() {
   );
 }
 
-export function RetryPauseButton({ orderId }: { orderId: string }) {
+export function RetryPauseButton({ cycleId }: { cycleId: string }) {
   const [state, action] = useActionState(retryPauseMetaCampaign, INITIAL);
 
   return (
     <form action={action} className="mt-2 flex flex-wrap items-center gap-2">
-      <input type="hidden" name="orderId" value={orderId} />
+      <input type="hidden" name="cycleId" value={cycleId} />
       <SubmitButton />
       {state.error && (
         <p role="alert" className="text-[11px] text-red-strong">

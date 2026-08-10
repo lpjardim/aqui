@@ -4,7 +4,7 @@ import { StatusPill } from "@/components/painel/status-pill";
 import { ButtonLink } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
-import { campaignName, progress } from "@/lib/orders";
+import { FREQUENCY_LABELS, campaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 
 export default async function CampanhasPage() {
@@ -14,6 +14,9 @@ export default async function CampanhasPage() {
   const orders = await prisma.order.findMany({
     where: { userId: user.id },
     orderBy: { createdAt: "desc" },
+    include: {
+      cycles: { orderBy: { createdAt: "desc" }, take: 1 },
+    },
   });
 
   return (
@@ -29,31 +32,38 @@ export default async function CampanhasPage() {
         </div>
       ) : (
         <ul className="mt-8 border-t border-line">
-          {orders.map((order) => (
-            <li key={order.id}>
-              <Link
-                href={`/painel/campanhas/${order.id}`}
-                className="flex flex-col gap-3 border-b border-line py-5 transition-colors hover:bg-surface sm:flex-row sm:items-center sm:justify-between"
-              >
-                <span>
-                  <span className="block text-[16px] font-semibold">
-                    {campaignName(user.companyName, order.zone)}
-                  </span>
-                  <span className="mt-1 block text-[13px] text-muted">
-                    {formatDate(order.createdAt)} ·{" "}
-                    {formatNumber(order.visualizationsPurchased)} visualizações
-                  </span>
-                </span>
+          {orders.map((order) => {
+            const cycle = order.cycles[0];
+            const deliveredViews = cycle?.deliveredViews ?? order.visualizationsDelivered;
+            const targetViews = cycle?.targetViews ?? order.visualizationsPurchased;
 
-                <span className="flex items-center gap-6">
-                  <StatusPill status={order.status} />
-                  <span className="text-[15px] font-bold tabular-nums">
-                    {progress(order.visualizationsDelivered, order.visualizationsPurchased)}%
+            return (
+              <li key={order.id}>
+                <Link
+                  href={`/painel/campanhas/${order.id}`}
+                  className="flex flex-col gap-3 border-b border-line py-5 transition-colors hover:bg-surface sm:flex-row sm:items-center sm:justify-between"
+                >
+                  <span>
+                    <span className="block text-[16px] font-semibold">
+                      {campaignName(user.companyName, order.zone)}
+                    </span>
+                    <span className="mt-1 block text-[13px] text-muted">
+                      {formatDate(order.createdAt)} ·{" "}
+                      {formatNumber(order.visualizationsPurchased)} visualizações ·{" "}
+                      {FREQUENCY_LABELS[order.billingFrequency]}
+                    </span>
                   </span>
-                </span>
-              </Link>
-            </li>
-          ))}
+
+                  <span className="flex items-center gap-6">
+                    <StatusPill status={order.status} />
+                    <span className="text-[15px] font-bold tabular-nums">
+                      {progress(deliveredViews, targetViews)}%
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

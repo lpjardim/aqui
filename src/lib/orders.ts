@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { ZONES } from "@/lib/zones";
-import { PACKS } from "@/lib/packs";
 import { formatDate, formatNumber } from "@/lib/format";
+import { MAX_VIEWS, MIN_VIEWS } from "@/lib/pricing";
 import type { Order, User } from "@/generated/prisma/client";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 export const orderInputSchema = z.object({
   zone: z.string().refine((value) => ZONES.includes(value), "Zona inválida."),
-  packId: z.enum(PACKS.map((pack) => pack.id) as [string, ...string[]]),
+  views: z.number().int().min(MIN_VIEWS, "Mínimo de 2.000 visualizações.").max(MAX_VIEWS, "Máximo de 200.000 visualizações."),
+  billingFrequency: z.enum(["ONE_TIME", "MONTHLY"]),
   assets: z
     .array(
       z.object({
@@ -76,3 +77,21 @@ export function progress(delivered: number, purchased: number): number {
   if (purchased <= 0) return 0;
   return Math.min(100, Math.round((delivered / purchased) * 100));
 }
+
+/** Linguagem simples para o cliente — nunca "subscription"/"billing". */
+export const FREQUENCY_LABELS: Record<"ONE_TIME" | "MONTHLY", string> = {
+  ONE_TIME: "Uma vez",
+  MONTHLY: "Todos os meses",
+};
+
+/** Estados de subscrição espelhados da Stripe, traduzidos para o admin. */
+export const SUBSCRIPTION_STATUS_LABELS: Record<string, string> = {
+  active: "Ativa",
+  past_due: "Pagamento em falta",
+  canceled: "Cancelada",
+  unpaid: "Não paga",
+  trialing: "Em teste",
+  incomplete: "Incompleta",
+  incomplete_expired: "Incompleta (expirada)",
+  paused: "Pausada",
+};
