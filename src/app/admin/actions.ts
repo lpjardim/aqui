@@ -142,6 +142,58 @@ export async function syncMetaNow(
   }
 }
 
+export type DeleteOrderState = { error: string | null };
+
+/**
+ * Elimina definitivamente uma encomenda — só permitido para encomendas em
+ * "Aguarda pagamento" (testes ou pedidos nunca pagos). Encomendas pagas,
+ * ativas, concluídas ou reembolsadas nunca podem ser eliminadas por aqui.
+ *
+ * Asset e CampaignUpdate são apagados automaticamente pela BD
+ * (onDelete: Cascade no schema), garantindo integridade referencial.
+ */
+export async function deleteOrder(
+  _previous: DeleteOrderState,
+  formData: FormData,
+): Promise<DeleteOrderState> {
+  await assertAdmin();
+
+  const orderId = String(formData.get("orderId") ?? "").trim();
+  if (!orderId) {
+    return { error: "Encomenda inválida." };
+  }
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: { status: true },
+  });
+
+  if (!order) {
+    return { error: "Encomenda não encontrada." };
+  }
+
+  if (order.status !== "PENDING_PAYMENT") {
+    return {
+      error:
+        'Só é possível eliminar encomendas em estado "Aguarda pagamento". Esta já avançou no fluxo.',
+    };
+  }
+
+  // `deleteMany` com o estado no `where` torna a verificação e a eliminação
+  // atómicas: se o estado tiver mudado entre a leitura acima e esta escrita,
+  // nada é apagado.
+  const result = await prisma.order.deleteMany({
+    where: { id: orderId, status: "PENDING_PAYMENT" },
+  });
+
+  if (result.count === 0) {
+    return { error: "A encomenda já não está elegível para eliminação. Recarregue a página." };
+  }
+
+  revalidatePath("/admin");
+  return { error: null };
+}
+
 export async function uploadProof(formData: FormData) {
   await assertAdmin();
 

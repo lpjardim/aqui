@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
+import { DeleteOrderButton } from "./delete-order-button";
 import {
   adminLogout,
   markCompleted,
@@ -98,6 +99,15 @@ export default async function AdminPage() {
                   {formatNumber(order.visualizationsDelivered)} /{" "}
                   {formatNumber(order.visualizationsPurchased)}
                 </p>
+                {order.status === "PENDING_PAYMENT" && (
+                  <div className="mt-2">
+                    <DeleteOrderButton
+                      orderId={order.id}
+                      companyName={order.user.companyName}
+                      email={order.user.email}
+                    />
+                  </div>
+                )}
               </div>
             </header>
 
