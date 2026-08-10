@@ -5,9 +5,11 @@ import { Footer } from "@/components/marketing/footer";
 export function LegalPage({
   title,
   sections,
+  children,
 }: {
   title: string;
   sections: { heading: string; body: string }[];
+  children?: React.ReactNode;
 }) {
   return (
     <div className="min-h-dvh">
@@ -31,6 +33,8 @@ export function LegalPage({
               </section>
             ))}
           </div>
+
+          {children && <div className="mt-8">{children}</div>}
 
           <p className="mt-12 text-[13px] text-muted">
             Documento provisório. Será substituído pela versão final antes do lançamento.

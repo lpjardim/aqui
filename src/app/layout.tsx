@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
+import { CookieBanner } from "@/components/consent/cookie-banner";
+import { MetaPixel } from "@/lib/meta/pixel";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -39,7 +41,11 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-PT" className={inter.variable}>
-      <body>{children}</body>
+      <body>
+        {children}
+        <MetaPixel />
+        <CookieBanner />
+      </body>
     </html>
   );
 }

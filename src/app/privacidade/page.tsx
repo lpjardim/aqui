@@ -20,7 +20,7 @@ export default function PrivacidadePage() {
         },
         {
           heading: "Com quem são partilhados",
-          body: "Os pagamentos são processados pela Stripe. A publicidade é entregue através das plataformas da Meta. Não vendemos dados a terceiros.",
+          body: "Os pagamentos são processados pela Stripe. A publicidade é entregue através das plataformas da Meta. Só com a sua autorização de cookies de marketing (ver Política de Cookies), partilhamos com a Meta o email e telefone de forma cifrada (hash), para medir e melhorar os nossos anúncios — nunca em texto simples. Não vendemos dados a terceiros.",
         },
         {
           heading: "Durante quanto tempo",

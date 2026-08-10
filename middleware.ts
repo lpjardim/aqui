@@ -17,14 +17,25 @@ import { NextResponse, type NextRequest } from "next/server";
  *   reescreve a `pricing_variant` real) ou `?experiment_debug=true`. Sessões
  *   com esta cookie ficam sempre excluídas dos KPIs — ver `getPricingContext`
  *   em `src/lib/experiments.ts`.
+ * - `_fbc_pending` — Meta Conversions API. Guarda o `fbclid` já normalizado
+ *   no formato oficial `fb.1.<timestamp_ms>.<fbclid>` (ver documentação
+ *   "ClickID and the fbp and fbc Parameters") assim que aparece na URL, para
+ *   não o perder enquanto o visitante ainda não decidiu sobre cookies de
+ *   marketing. NUNCA é a cookie `_fbc` real (essa só é escrita pelo próprio
+ *   Pixel da Meta, e só depois de consentimento) — é só um valor técnico de
+ *   reserva, lido como fallback pelos endpoints que enviam eventos para a
+ *   Meta (ver `src/app/api/meta/track/route.ts`).
  */
 
 const PRICING_VARIANT_COOKIE = "pricing_variant";
 const VISITOR_ID_COOKIE = "aqui_vid";
 const DEBUG_COOKIE = "experiment_debug";
+const FBC_PENDING_COOKIE = "_fbc_pending";
+const FBC_SUBDOMAIN_INDEX = 1;
 
 const THIRTY_DAYS = 60 * 60 * 24 * 30;
 const ONE_HUNDRED_EIGHTY_DAYS = 60 * 60 * 24 * 180;
+const NINETY_DAYS = 60 * 60 * 24 * 90;
 const ONE_DAY = 60 * 60 * 24;
 
 function randomVariant(): "A" | "B" {
@@ -75,6 +86,17 @@ export function middleware(request: NextRequest) {
     request.cookies.set(VISITOR_ID_COOKIE, visitorId);
     response.cookies.set(VISITOR_ID_COOKIE, visitorId, {
       maxAge: ONE_HUNDRED_EIGHTY_DAYS,
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+    });
+  }
+
+  const fbclid = searchParams.get("fbclid");
+  if (fbclid && !request.cookies.get(FBC_PENDING_COOKIE)) {
+    const fbc = `fb.${FBC_SUBDOMAIN_INDEX}.${Date.now()}.${fbclid}`;
+    response.cookies.set(FBC_PENDING_COOKIE, fbc, {
+      maxAge: NINETY_DAYS,
       path: "/",
       httpOnly: true,
       sameSite: "lax",

@@ -25,6 +25,7 @@ import {
 } from "@/lib/assets";
 import { track } from "@/lib/analytics";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackMetaEvent } from "@/lib/meta/track-client";
 
 const TOTAL_STEPS = 6;
 
@@ -117,6 +118,10 @@ export function OrderForm({
       custom: initialCustom,
       frequency: initialFrequency,
     });
+    // Mesma definição de "início de checkout" que o `checkout_started` interno:
+    // chegar a este formulário é o ponto mais correto do funil atual (não há
+    // página de checkout própria — o passo seguinte já é o Stripe Checkout).
+    trackMetaEvent("InitiateCheckout");
     // Só reportar o checkout iniciado nesta chegada ao formulário, não em cada re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

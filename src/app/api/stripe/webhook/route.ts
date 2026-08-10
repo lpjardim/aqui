@@ -3,14 +3,97 @@ import type Stripe from "stripe";
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@/generated/prisma/client";
 import type { Order, User } from "@/generated/prisma/client";
-import { getStripe } from "@/lib/stripe";
+import { getStripe, appUrl } from "@/lib/stripe";
 import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail, sendInternalNotification } from "@/lib/email";
 import { resumeMetaCampaign } from "@/lib/meta";
+import { sendMetaCapiEvent } from "@/lib/meta/capi";
 
 export const runtime = "nodejs";
 
 const LOG_PREFIX = "[stripe:webhook]";
+
+type OrderWithUser = Order & { user: User };
+
+/**
+ * Envia `Purchase` (sempre) e `Subscribe` (só na 1ª mensalidade de uma
+ * subscrição MONTHLY, nunca em renovações) para a Meta Conversions API,
+ * usando o `metaPurchaseEventId` gerado em `/api/pedido` — o MESMO id é
+ * usado pelo Pixel em `/checkout/sucesso`, para que a Meta deduplique
+ * corretamente o mesmo pagamento chegado pelas duas vias. Currency é
+ * sempre EUR (todo o catálogo de preços da Aqui. é EUR). Sem consentimento
+ * de marketing guardado na Order, não envia nada.
+ *
+ * Chamado só depois do pagamento estar confirmado (nunca antes) — a fonte
+ * de verdade do valor é sempre o pagamento real (Stripe), nunca um valor
+ * assumido.
+ */
+async function sendMetaPurchaseAndSubscribeOnce(
+  order: OrderWithUser,
+  amountCents: number,
+): Promise<void> {
+  if (!order.metaMarketingConsent) return;
+
+  // Fallback para encomendas criadas antes deste campo existir.
+  const eventId = order.metaPurchaseEventId ?? order.id;
+  const eventSourceUrl = appUrl(`/checkout/sucesso?pedido=${order.id}`);
+  const userData = {
+    email: order.user.email,
+    phone: order.user.phone,
+    externalId: order.userId,
+    fbp: order.metaFbp,
+    fbc: order.metaFbc,
+    clientUserAgent: order.metaClientUserAgent,
+  };
+  const customData = { value: amountCents / 100, currency: "EUR" };
+
+  await sendMetaCapiEvent({
+    eventName: "Purchase",
+    eventId,
+    eventSourceUrl,
+    actionSource: "website",
+    userData,
+    customData,
+  });
+
+  if (order.billingFrequency === "MONTHLY") {
+    await sendMetaCapiEvent({
+      eventName: "Subscribe",
+      eventId,
+      eventSourceUrl,
+      actionSource: "website",
+      userData,
+      customData,
+    });
+  }
+}
+
+/**
+ * Envia `Purchase` para uma renovação mensal real (nunca `Subscribe` — isso
+ * só acontece uma vez, na criação da subscrição). `event_id` = `invoice.id`
+ * do Stripe: não tem homólogo no Pixel (não há página associada a uma
+ * renovação), mas garante que um retry do mesmo webhook da Stripe nunca gera
+ * um evento Meta duplicado.
+ */
+async function sendMetaRenewalPurchase(order: OrderWithUser, invoice: Stripe.Invoice): Promise<void> {
+  if (!order.metaMarketingConsent) return;
+
+  await sendMetaCapiEvent({
+    eventName: "Purchase",
+    eventId: invoice.id ?? `${order.id}-${invoice.period_start}`,
+    eventSourceUrl: appUrl(`/checkout/sucesso?pedido=${order.id}`),
+    actionSource: "website",
+    userData: {
+      email: order.user.email,
+      phone: order.user.phone,
+      externalId: order.userId,
+      fbp: order.metaFbp,
+      fbc: order.metaFbc,
+      clientUserAgent: order.metaClientUserAgent,
+    },
+    customData: { value: invoice.amount_paid / 100, currency: "EUR" },
+  });
+}
 
 /** Logs só com IDs/estados — nunca segredos, tokens, emails ou outros dados pessoais. */
 function log(message: string, data?: Record<string, unknown>) {
@@ -117,6 +200,15 @@ async function markAsPaid(session: Stripe.Checkout.Session) {
   log("encomenda marcada como PAID", { orderId: order.id, billingFrequency: order.billingFrequency });
 
   after(() => notifyPaidOrder(order.id, order.userId, order.user.email));
+
+  // Fonte de verdade do valor: o total realmente cobrado nesta sessão
+  // (nunca `order.price`, que é só o preço calculado no momento do pedido).
+  const amountCents = session.amount_total ?? order.price;
+  after(() =>
+    sendMetaPurchaseAndSubscribeOnce(order, amountCents).catch((error) =>
+      logError("falha ao enviar Purchase/Subscribe para a Meta", error, { orderId: order.id }),
+    ),
+  );
 }
 
 /**
@@ -133,8 +225,6 @@ function subscriptionIdFromInvoice(invoice: Stripe.Invoice): string | null {
 function orderIdFromInvoiceMetadata(invoice: Stripe.Invoice): string | null {
   return invoice.parent?.subscription_details?.metadata?.orderId ?? null;
 }
-
-type OrderWithUser = Order & { user: User };
 
 /**
  * Resolve a `Order` associada a uma fatura de subscrição. Tenta primeiro
@@ -265,9 +355,19 @@ async function handleInvoicePaid(invoice: Stripe.Invoice) {
     renovacao: existingCyclesCount > 0,
   });
 
-  // 1º ciclo: nada a reativar (a campanha só é associada/ativada pelo fluxo
-  // normal de associação Meta).
+  // 1º ciclo: nada a reativar, e nenhum Purchase aqui — já foi enviado por
+  // `markAsPaid` (checkout.session.completed), para não duplicar o mesmo
+  // pagamento. `Subscribe` também nunca aqui, mesmo em renovações.
   if (existingCyclesCount === 0) return;
+
+  after(() =>
+    sendMetaRenewalPurchase(order, invoice).catch((error) =>
+      logError("falha ao enviar Purchase de renovação para a Meta", error, {
+        orderId: order.id,
+        invoiceId: invoice.id,
+      }),
+    ),
+  );
 
   await maybeReactivateForRenewal(order, cycle.id);
 }

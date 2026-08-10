@@ -5,6 +5,7 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackMetaEvent } from "@/lib/meta/track-client";
 
 /**
  * Variante A do A/B test de preços — design "split": cada card mostra as
@@ -16,6 +17,7 @@ import { trackExperimentEvent } from "@/lib/experiment-tracking";
 export function PrecosSplit() {
   useEffect(() => {
     trackExperimentEvent("pricing_exposed", { layout: "split" });
+    trackMetaEvent("ViewContent");
   }, []);
 
   return (

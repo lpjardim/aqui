@@ -1,3 +1,4 @@
+import { nanoid } from "nanoid";
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { checkoutLineName, orderInputSchema } from "@/lib/orders";
@@ -6,6 +7,14 @@ import { appUrl, getStripe, isStripeConfigured } from "@/lib/stripe";
 import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail } from "@/lib/email";
 import { getPricingContext } from "@/lib/experiments";
+import { hasMarketingConsent } from "@/lib/consent";
+
+function readCookie(request: Request, name: string): string | null {
+  const header = request.headers.get("cookie");
+  if (!header) return null;
+  const match = header.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
+  return match ? decodeURIComponent(match[1]) : null;
+}
 
 export const runtime = "nodejs";
 
@@ -39,6 +48,20 @@ export async function POST(request: Request) {
     // request (nunca do body) — ver `getPricingContext`.
     const { variant: pricingVariant, isDebug: pricingExperimentDebug } = await getPricingContext();
 
+    // Meta Pixel + Conversions API — capturados aqui porque este é o único
+    // momento em que temos o pedido real do browser do cliente; o webhook da
+    // Stripe (que confirma o pagamento) não tem acesso a nada disto.
+    // `metaPurchaseEventId` é gerado já agora (mesmo que o pagamento venha a
+    // falhar) e fica na Order — `/checkout/sucesso` e o webhook lêem-no de
+    // lá, partilhando o mesmo id entre o Pixel (browser) e a CAPI (servidor).
+    const metaMarketingConsent = await hasMarketingConsent();
+    const metaPurchaseEventId = nanoid();
+    const metaFbp = metaMarketingConsent ? readCookie(request, "_fbp") : null;
+    const metaFbc = metaMarketingConsent
+      ? (readCookie(request, "_fbc") ?? readCookie(request, "_fbc_pending"))
+      : null;
+    const metaClientUserAgent = metaMarketingConsent ? request.headers.get("user-agent") : null;
+
     const user = await prisma.user.upsert({
       where: { email },
       create: {
@@ -63,6 +86,11 @@ export async function POST(request: Request) {
         billingFrequency: input.billingFrequency,
         pricingVariant,
         pricingExperimentDebug,
+        metaPurchaseEventId,
+        metaMarketingConsent,
+        metaFbp,
+        metaFbc,
+        metaClientUserAgent,
         assets: {
           create: input.assets.map((asset) => ({
             fileUrl: asset.url,

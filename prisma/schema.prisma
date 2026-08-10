@@ -97,6 +97,25 @@ model Order {
   pricingVariant         PricingVariant?
   pricingExperimentDebug Boolean         @default(false)
 
+  // Meta Pixel + Conversions API — capturados em `/api/pedido` (único
+  // momento em que temos o pedido real do browser do cliente; o webhook da
+  // Stripe não tem acesso aos cookies/IP de quem pagou). `metaPurchaseEventId`
+  // é partilhado entre o Pixel (em `/checkout/sucesso`) e a CAPI (no webhook)
+  // para o 1º pagamento — dedup da Meta é por (event_name, event_id), por
+  // isso o mesmo id serve tanto para `Purchase` como para `Subscribe`.
+  // Deliberadamente não guardamos o IP do cliente aqui (minimização de
+  // dados) — os eventos server-side de Purchase/Subscribe seguem sem
+  // `client_ip_address`, confiando em email/telefone/external_id/fbp/fbc.
+  metaPurchaseEventId String?
+  metaFbp             String?
+  metaFbc             String?
+  metaClientUserAgent String?
+  // Consentimento de marketing (cookie `aqui_consent`) no momento em que o
+  // pedido foi criado. Sem consentimento, o webhook nunca envia Purchase/
+  // Subscribe para a Meta para esta encomenda — nem no 1º pagamento, nem em
+  // renovações — independentemente de mais tarde vir a haver consentimento.
+  metaMarketingConsent Boolean @default(false)
+
   // --- Histórico anterior aos DeliveryCycle — mantidos apenas para não
   // perder dados de encomendas antigas (criadas antes desta migration). O
   // código novo lê/escreve exclusivamente nos campos equivalentes do

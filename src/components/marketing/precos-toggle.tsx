@@ -5,6 +5,7 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackMetaEvent } from "@/lib/meta/track-client";
 import type { BillingFrequency } from "@/lib/pricing";
 
 /**
@@ -21,6 +22,7 @@ export function PrecosToggle() {
   useEffect(() => {
     // Só no mount — a mudança de toggle é reportada separadamente abaixo.
     trackExperimentEvent("pricing_exposed", { layout: "toggle", frequency: "MONTHLY" });
+    trackMetaEvent("ViewContent");
   }, []);
 
   function selectFrequency(next: BillingFrequency) {

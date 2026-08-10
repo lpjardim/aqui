@@ -214,8 +214,97 @@ dessa pasta). Enquanto não existirem, aparece um espaço reservado com a mesma 
 
 ## Tracking
 
-Não há integrações externas. `src/lib/analytics.ts` centraliza os eventos para que o Meta
-Pixel/CAPI possa ser adicionado num único sítio mais tarde.
+`src/lib/analytics.ts` continua sem integrações externas (só `console.debug` em dev). O Meta
+Pixel/CAPI vive num módulo próprio (`src/lib/meta/`, `src/lib/consent.ts`) — ver secção
+seguinte.
+
+## Meta Pixel + Conversions API
+
+Módulo completamente separado da Integração Meta Marketing API acima (dataset "Aqui.",
+ID `1073353675389361` no Events Manager — não confundir com "Aqui. Ads Sync", que é outra
+coisa). Só 4 eventos, sem PageView automático:
+
+| Evento | Onde dispara | Pixel | CAPI |
+| --- | --- | --- | --- |
+| `ViewContent` | Mount da secção de preços na home (`precos-split.tsx`/`precos-toggle.tsx`) | Sim | Sim, via `/api/meta/track` |
+| `InitiateCheckout` | Mount do formulário `/pedido` (mesmo ponto que `checkout_started`) | Sim | Sim, via `/api/meta/track` |
+| `Purchase` | 1º pagamento: webhook `checkout.session.completed`/`async_payment_succeeded`. Renovações mensais: webhook `invoice.paid` | Sim, só o 1º pagamento (`/checkout/sucesso`) | Sim, sempre (fonte de verdade) |
+| `Subscribe` | Só na 1ª mensalidade de uma subscrição `MONTHLY`, nunca em renovações | Sim, só o 1º pagamento (`/checkout/sucesso`) | Sim, sempre |
+
+### Deduplicação Pixel + CAPI
+
+Mesmo `event_id` nos dois lados (dedup da Meta é por `(event_name, event_id)`):
+
+- `ViewContent`/`InitiateCheckout`: `event_id` gerado no browser (`crypto.randomUUID()`),
+  usado simultaneamente no `fbq(...)` e no POST para `/api/meta/track`.
+- `Purchase`/`Subscribe` do 1º pagamento: `Order.metaPurchaseEventId` (gerado com `nanoid()`
+  em `/api/pedido`, antes de sequer se saber se o pagamento vai ser bem sucedido). O mesmo id
+  serve para os dois eventos — não há colisão porque a dedup é por par
+  `(event_name, event_id)`.
+- `Purchase` de renovação mensal: `event_id = invoice.id` da Stripe — sem homólogo no Pixel
+  (não há página associada a uma renovação), mas garante que um retry do mesmo webhook nunca
+  duplica o evento do lado da Meta.
+
+### Purchase a partir do Stripe (fonte de verdade)
+
+**Nunca** a página `/checkout/sucesso` decide se houve pagamento — isso continua exclusivo do
+webhook. `/checkout/sucesso` só lê o estado já confirmado e dispara o Pixel com o valor real.
+
+- `markAsPaid()` (`checkout.session.completed`/`async_payment_succeeded`) — Purchase com
+  `session.amount_total` (ONE_TIME e 1º pagamento MONTHLY). Se `billingFrequency === MONTHLY`,
+  envia também Subscribe (mesmo `event_id`).
+- `handleInvoicePaid()` (`invoice.paid`) — só envia Purchase quando **já existiam ciclos
+  anteriores** (renovação real, nunca o 1º ciclo, que já foi tratado por `markAsPaid`). Nunca
+  Subscribe aqui.
+- Currency é sempre `EUR` (todo o catálogo de preços da Aqui. é EUR).
+- Sem consentimento de marketing guardado na Order (`metaMarketingConsent`), nada é enviado —
+  nem no 1º pagamento nem em renovações futuras dessa Order.
+
+### Consentimento (PT/UE)
+
+Cookie `aqui_consent` (`granted`/`denied`), banner mínimo em
+`src/components/consent/cookie-banner.tsx`, sem categorias além de "essencial" (sempre ativo)
+e "marketing" (Meta). Por omissão, sem decisão = sem Pixel, sem `_fbp`/`_fbc`, sem envio de
+dados pessoais para a Meta. Pode ser reaberto em `/cookies` ("Gerir preferências de cookies").
+
+### fbp/fbc
+
+- `_fbp`/`_fbc` reais só existem depois de consentimento — geridos pelo próprio script do
+  Pixel (`fbevents.js`), nunca inventados por nós.
+- Se aparecer `fbclid` na URL antes de haver consentimento, `middleware.ts` guarda-o já no
+  formato oficial (`fb.1.<timestamp_ms>.<fbclid>`) numa cookie técnica `_fbc_pending`, para não
+  se perder enquanto o visitante ainda não decidiu. `/api/meta/track` e `/api/pedido` usam-na
+  como fallback quando `_fbc` ainda não existe.
+- `fbp`/`fbc` nunca são hashed (ver `src/lib/meta/hash.ts` e `src/lib/meta/capi.ts`).
+
+### Identificadores / match quality
+
+- `em`/`ph`: SHA-256 depois de normalizar (email: trim + lowercase; telefone: só dígitos, sem
+  zeros à esquerda, com indicativo — assume `351` para números de 9 dígitos a começar por `9`).
+- `external_id`: SHA-256 do `User.id` interno.
+- `client_ip_address`/`client_user_agent`: nunca hashed. Só enviados nos eventos que partem de
+  um pedido real ao servidor (`ViewContent`/`InitiateCheckout` via `/api/meta/track`, que lê
+  IP/UA da própria request). Os eventos de `Purchase`/`Subscribe` do webhook Stripe **não**
+  incluem `client_ip_address` — o webhook não tem acesso ao IP de quem pagou, e optámos por não
+  o guardar na Order (minimização de dados); usam `client_user_agent` guardado em
+  `Order.metaClientUserAgent` (capturado em `/api/pedido`).
+
+### Variáveis de ambiente
+
+| Variável | Para que serve |
+| --- | --- |
+| `NEXT_PUBLIC_META_PIXEL_ID` | ID do dataset "Aqui." no Events Manager (`1073353675389361`) — público, visível em qualquer pedido de rede |
+| `META_CAPI_ACCESS_TOKEN` | Token gerado especificamente para a Conversions API deste dataset — **não** é o mesmo token de `META_ACCESS_TOKEN` (Ads Sync) |
+| `META_GRAPH_API_VERSION` | Reaproveitada da Integração Meta Marketing API acima — mesma versão para os dois módulos |
+| `META_CAPI_TEST_EVENT_CODE` | Só durante testes no separador "Testar eventos" do Events Manager — nunca definida em produção |
+
+### Ficheiros
+
+`src/lib/meta/hash.ts` (normalização + SHA-256), `src/lib/meta/capi.ts` (cliente server-side da
+Conversions API), `src/lib/meta/pixel.tsx` (carregamento do Pixel gated por consentimento +
+`fireMetaPixelEvent`), `src/lib/meta/track-client.ts` (dispara Pixel + CAPI em simultâneo com o
+mesmo `event_id`), `src/app/api/meta/track/route.ts` (proxy CAPI para `ViewContent`/
+`InitiateCheckout`), `src/lib/consent.ts` + `src/components/consent/` (consentimento).
 
 ## Deploy na Vercel
 
