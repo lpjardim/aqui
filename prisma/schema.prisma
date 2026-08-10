@@ -84,6 +84,13 @@ model CampaignUpdate {
   @@index([orderId])
 }
 
+/** Pares chave/valor simples para configurações globais (ex.: última sincronização Meta). */
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
 model LoginToken {
   id        String    @id @default(cuid())
   userId    String

@@ -2,10 +2,12 @@ import type { Metadata } from "next";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { isAdmin } from "@/lib/auth";
-import { formatDate, formatNumber, formatPrice } from "@/lib/format";
+import { formatDate, formatDateTime, formatNumber, formatPrice } from "@/lib/format";
 import { STATUS_LABELS, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
+import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
+import { MetaSyncButton } from "./meta-sync-button";
 import {
   adminLogout,
   markCompleted,
@@ -34,10 +36,13 @@ export default async function AdminPage() {
     );
   }
 
-  const orders = await prisma.order.findMany({
-    orderBy: { createdAt: "desc" },
-    include: { user: true, assets: true },
-  });
+  const [orders, lastMetaSyncAt] = await Promise.all([
+    prisma.order.findMany({
+      orderBy: { createdAt: "desc" },
+      include: { user: true, assets: true },
+    }),
+    getLastMetaSyncAt(),
+  ]);
 
   return (
     <main className="container-page py-10">
@@ -53,12 +58,27 @@ export default async function AdminPage() {
         </form>
       </div>
 
-      <h1 className="mt-10 text-[26px] font-black">Encomendas</h1>
-      <p className="mt-2 text-[14px] text-muted">{orders.length} no total</p>
+      <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="text-[26px] font-black">Encomendas</h1>
+          <p className="mt-2 text-[14px] text-muted">{orders.length} no total</p>
+        </div>
+        <div className="text-right">
+          <MetaSyncButton />
+          <p className="mt-2 text-[12px] text-muted">
+            Última sincronização Meta:{" "}
+            {lastMetaSyncAt ? formatDateTime(lastMetaSyncAt) : "ainda não foi feita"}
+          </p>
+        </div>
+      </div>
 
       <div className="mt-8 space-y-4">
         {orders.map((order) => (
-          <article key={order.id} className="rounded-lg border border-line p-6">
+          <article
+            key={order.id}
+            id={`order-${order.id}`}
+            className="scroll-mt-6 rounded-lg border border-line p-6"
+          >
             <header className="flex flex-wrap items-start justify-between gap-4">
               <div>
                 <h2 className="text-[17px] font-bold">{order.user.companyName}</h2>
@@ -162,13 +182,20 @@ export default async function AdminPage() {
                 <h3 className="text-[13px] font-bold uppercase tracking-[0.1em] text-muted">
                   Meta
                 </h3>
-                <p className="text-[12px] text-muted">
-                  Visualizações entregues (automático futuramente):{" "}
-                  <span className="font-semibold text-ink">
-                    {formatNumber(order.visualizationsDelivered)} /{" "}
-                    {formatNumber(order.visualizationsPurchased)}
-                  </span>
-                </p>
+                <div className="text-right">
+                  <p className="text-[12px] text-muted">
+                    Visualizações entregues (via Meta):{" "}
+                    <span className="font-semibold text-ink">
+                      {formatNumber(order.visualizationsDelivered)} /{" "}
+                      {formatNumber(order.visualizationsPurchased)}
+                    </span>
+                  </p>
+                  {order.targetReachedAt && (
+                    <p className="mt-0.5 text-[12px] text-muted">
+                      Alvo atingido em {formatDateTime(order.targetReachedAt)}
+                    </p>
+                  )}
+                </div>
               </div>
 
               <form action={updateMeta} className="mt-3 flex flex-wrap items-end gap-3">

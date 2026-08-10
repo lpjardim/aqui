@@ -9,6 +9,7 @@ import {
   isAdmin,
 } from "@/lib/auth";
 import { buildProofKey, storage } from "@/lib/storage";
+import { syncActiveCampaigns } from "@/lib/meta";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 const STATUSES: OrderStatus[] = [
@@ -105,6 +106,40 @@ export async function markCompleted(formData: FormData) {
   ]);
 
   revalidatePath("/admin");
+}
+
+export type MetaSyncState = { message: string | null; error: string | null };
+
+export async function syncMetaNow(
+  _previous: MetaSyncState,
+  _formData: FormData,
+): Promise<MetaSyncState> {
+  await assertAdmin();
+
+  try {
+    const results = await syncActiveCampaigns();
+    revalidatePath("/admin");
+
+    if (results.length === 0) {
+      return { message: "Sem encomendas elegíveis para sincronizar.", error: null };
+    }
+
+    const ok = results.filter((result) => result.ok).length;
+    const failed = results.length - ok;
+
+    return {
+      message: `Sincronização concluída: ${ok} atualizada(s), ${failed} com falha.`,
+      error:
+        failed > 0
+          ? "Algumas encomendas falharam — ver logs do servidor para detalhe."
+          : null,
+    };
+  } catch (error) {
+    return {
+      message: null,
+      error: error instanceof Error ? error.message : "Erro desconhecido ao sincronizar.",
+    };
+  }
 }
 
 export async function uploadProof(formData: FormData) {

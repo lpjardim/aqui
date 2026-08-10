@@ -4,6 +4,14 @@ const dateFormatter = new Intl.DateTimeFormat("pt-PT", {
   year: "numeric",
 });
 
+const dateTimeFormatter = new Intl.DateTimeFormat("pt-PT", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 /** Milhares separados por ponto, como na identidade da marca: 20.000. */
 export function formatNumber(value: number): string {
   const [integer, decimals] = Math.abs(value).toFixed(0).split(".");
@@ -25,4 +33,8 @@ export function formatPrice(cents: number): string {
 
 export function formatDate(date: Date): string {
   return dateFormatter.format(date);
+}
+
+export function formatDateTime(date: Date): string {
+  return dateTimeFormatter.format(date);
 }

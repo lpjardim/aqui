@@ -41,6 +41,8 @@ Sem `RESEND_API_KEY`, os emails (incluindo os magic links) são escritos na cons
 | `BLOB_READ_WRITE_TOKEN` | Token do Vercel Blob |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Envio de email |
 | `INTERNAL_NOTIFICATIONS_EMAIL` | Destino de notificações internas (ex.: alvo de visualizações atingido) |
+| `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_ID`, `META_GRAPH_API_VERSION` | Integração Meta Marketing API (ver secção própria) |
+| `CRON_SECRET` | Autentica o Vercel Cron em `/api/cron/meta-sync` |
 
 ## Stripe
 
@@ -82,25 +84,72 @@ Domains qual domínio é o principal) antes de guardar o endpoint na Stripe.
 Trocar de fornecedor (Cloudflare R2, S3, …) é implementar a mesma interface e registá-lo em
 `src/lib/storage/index.ts`.
 
-## Integração Meta Marketing API (preparação)
+## Integração Meta Marketing API
 
-A `Order` já tem os campos `metaCampaignId`, `metaAdSetId`, `metaAdId`, `metaAdUrl` e
-`targetReachedAt`, preenchíveis manualmente na secção "Meta" do `/admin`. Ainda não há
-OAuth/credenciais Meta nem chamadas à Graph API.
+A `Order` tem os campos `metaCampaignId`, `metaAdSetId`, `metaAdId`, `metaAdUrl` e
+`targetReachedAt`, preenchíveis manualmente na secção "Meta" do `/admin`. Enquanto o
+`metaAdId` estiver preenchido, `visualizationsDelivered` passa a ser atualizado
+automaticamente a partir das "impressions" reportadas pela Meta Ads Insights API — não
+existe (nem deve voltar a existir) um input manual para esse valor.
 
-`src/lib/meta.ts` já tem a arquitetura pronta para quando isso existir:
+### Como funciona
 
-- `fetchMetaDeliveredViews(metaAdId)` — stub que vai fazer o pedido real à Ads Insights API;
-  hoje lança erro de propósito.
-- `applyDeliveredViews(orderId, delivered)` — lógica real: atualiza
-  `visualizationsDelivered`, regista `CampaignUpdate` e, ao atingir `visualizationsPurchased`
-  pela primeira vez, guarda `targetReachedAt` e envia uma notificação interna
-  (`INTERNAL_NOTIFICATIONS_EMAIL`). Nunca pausa a campanha automaticamente.
-- `syncActiveCampaigns()` — ponto de entrada pensado para um futuro job/cron que percorre
-  encomendas `ACTIVE` com `metaAdId` definido.
+`src/lib/meta.ts` concentra toda a lógica:
 
-Falta apenas: autenticação Meta, implementar `fetchMetaDeliveredViews` e agendar
-`syncActiveCampaigns` (Vercel Cron ou equivalente).
+- `fetchMetaDeliveredViews(metaAdId)` — chama `GET /{metaAdId}/insights?fields=impressions`
+  na Graph API (versão definida por `META_GRAPH_API_VERSION`, nunca hardcoded), com timeout
+  de 8s. Nunca regista `META_ACCESS_TOKEN` em logs.
+- `applyDeliveredViews(orderId, impressions)` — `visualizationsDelivered` nunca desce
+  (usa sempre o maior valor já conhecido) e fica sempre limitado a
+  `visualizationsPurchased` (o progresso no painel nunca passa de 100%). O valor em bruto
+  devolvido pela Meta fica registado em `CampaignUpdate` para auditoria, mesmo que exceda o
+  comprado. Ao atingir o alvo pela primeira vez, guarda `targetReachedAt` e envia UMA
+  notificação interna (`INTERNAL_NOTIFICATIONS_EMAIL`) — nunca pausa a campanha.
+- `syncActiveCampaigns()` — percorre encomendas `PAID`, `IN_REVIEW` ou `ACTIVE` com
+  `metaAdId` definido; uma falha numa encomenda não impede as restantes. Regista a hora da
+  última execução (tabela `AppSetting`), mostrada no `/admin`.
+
+Fluxo: **Meta (impressions) → `syncActiveCampaigns` → `Order.visualizationsDelivered` (BD)
+→ `/painel/campanhas/[id]` (progresso do cliente) → notificação interna ao atingir o
+alvo**.
+
+### Disparo da sincronização
+
+- **Manual (MVP):** botão "Sincronizar Meta" no `/admin`, útil para testar sem esperar
+  pelo cron.
+- **Automático:** `/api/cron/meta-sync`, protegido por `CRON_SECRET` (a Vercel injeta
+  automaticamente `Authorization: Bearer <CRON_SECRET>` nas suas próprias invocações;
+  qualquer outro pedido é recusado com 401). Agendado em `vercel.json`.
+
+No plano **Hobby**, a Vercel só permite cron jobs **1x por dia** (e com até ~59 min de
+imprecisão), por isso `vercel.json` está configurado com `"0 6 * * *"`. Ao mudar para o
+plano **Pro**, basta alterar essa expressão (ex.: `"0 * * * *"` para 1x por hora) — não é
+preciso alterar código.
+
+### Configuração necessária (credenciais Meta)
+
+Variáveis de ambiente:
+
+| Variável | Para que serve |
+| --- | --- |
+| `META_ACCESS_TOKEN` | Token de acesso server-to-server (System User, permissão `ads_read`) |
+| `META_AD_ACCOUNT_ID` | Conta de anúncios da Aqui. (referência; a chamada de insights usa o `metaAdId` diretamente) |
+| `META_GRAPH_API_VERSION` | Versão da Graph API a usar em todos os pedidos |
+| `CRON_SECRET` | Autentica as chamadas do Vercel Cron a `/api/cron/meta-sync` |
+
+Caminho recomendado para gerar o token, feito uma única vez em
+[Business Settings → System Users](https://business.facebook.com/settings/system-users):
+
+1. Criar (ou reutilizar) uma Meta App associada ao Business Portfolio da Aqui., com o
+   produto **Marketing API** adicionado.
+2. Criar um **System User** do tipo "Admin" (ou "Employee", conforme o mínimo necessário)
+   dentro desse Business Portfolio.
+3. Atribuir ao System User apenas a conta de anúncios da Aqui. (não o portefólio inteiro).
+4. Gerar um token para esse System User com a permissão `ads_read` (não usar tokens
+   temporários do Graph API Explorer em produção — os tokens de System User não expiram
+   por inatividade do browser).
+5. Colocar o token em `META_ACCESS_TOKEN` nas Environment Variables da Vercel (nunca em
+   código, `.env` versionado ou logs).
 
 ## Autenticação
 
