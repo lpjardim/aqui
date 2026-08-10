@@ -61,28 +61,25 @@ export async function updateStatus(formData: FormData) {
   revalidatePath("/admin");
 }
 
-export async function updateDelivered(formData: FormData) {
+export async function updateMeta(formData: FormData) {
   await assertAdmin();
 
   const orderId = String(formData.get("orderId"));
-  const delivered = Number(formData.get("delivered"));
 
-  if (!Number.isFinite(delivered) || delivered < 0) return;
+  const toNullable = (key: string) => {
+    const value = String(formData.get(key) ?? "").trim();
+    return value.length > 0 ? value : null;
+  };
 
-  const order = await prisma.order.findUnique({ where: { id: orderId } });
-  if (!order) return;
-
-  const value = Math.min(delivered, order.visualizationsPurchased);
-
-  await prisma.$transaction([
-    prisma.order.update({
-      where: { id: orderId },
-      data: { visualizationsDelivered: value },
-    }),
-    prisma.campaignUpdate.create({
-      data: { orderId, visualizationsDelivered: value },
-    }),
-  ]);
+  await prisma.order.update({
+    where: { id: orderId },
+    data: {
+      metaCampaignId: toNullable("metaCampaignId"),
+      metaAdSetId: toNullable("metaAdSetId"),
+      metaAdId: toNullable("metaAdId"),
+      metaAdUrl: toNullable("metaAdUrl"),
+    },
+  });
 
   revalidatePath("/admin");
 }

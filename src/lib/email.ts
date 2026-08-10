@@ -32,6 +32,21 @@ export async function sendEmail({ to, subject, text, html }: SendEmailInput): Pr
   }
 }
 
+/**
+ * Notificação interna (equipa Aqui.), não destinada ao cliente. Sem
+ * INTERNAL_NOTIFICATIONS_EMAIL configurado, fica apenas registada na consola.
+ */
+export async function sendInternalNotification(subject: string, text: string): Promise<void> {
+  const to = process.env.INTERNAL_NOTIFICATIONS_EMAIL;
+
+  if (!to) {
+    console.info(`[notificação interna] ${subject}\n${text}`);
+    return;
+  }
+
+  await sendEmail({ to, subject: `[Aqui.] ${subject}`, text });
+}
+
 export async function sendLoginEmail(to: string, link: string): Promise<void> {
   await sendEmail({
     to,

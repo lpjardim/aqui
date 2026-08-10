@@ -9,7 +9,7 @@ import { AdminLogin } from "./admin-login";
 import {
   adminLogout,
   markCompleted,
-  updateDelivered,
+  updateMeta,
   updateStatus,
   uploadProof,
 } from "./actions";
@@ -122,24 +122,6 @@ export default async function AdminPage() {
                 </Button>
               </form>
 
-              <form action={updateDelivered} className="flex items-end gap-2">
-                <input type="hidden" name="orderId" value={order.id} />
-                <label className="text-[12px] text-muted">
-                  Visualizações entregues
-                  <input
-                    type="number"
-                    name="delivered"
-                    min={0}
-                    max={order.visualizationsPurchased}
-                    defaultValue={order.visualizationsDelivered}
-                    className={`mt-1 block w-40 ${inputClass}`}
-                  />
-                </label>
-                <Button variant="outline" className="h-10 px-4 text-[13px]">
-                  Atualizar
-                </Button>
-              </form>
-
               <form action={markCompleted}>
                 <input type="hidden" name="orderId" value={order.id} />
                 <Button variant="outline" className="h-10 px-4 text-[13px]">
@@ -173,6 +155,65 @@ export default async function AdminPage() {
                   Ver comprovativo atual
                 </a>
               )}
+            </div>
+
+            <div className="mt-5 border-t border-line pt-5">
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="text-[13px] font-bold uppercase tracking-[0.1em] text-muted">
+                  Meta
+                </h3>
+                <p className="text-[12px] text-muted">
+                  Visualizações entregues (automático futuramente):{" "}
+                  <span className="font-semibold text-ink">
+                    {formatNumber(order.visualizationsDelivered)} /{" "}
+                    {formatNumber(order.visualizationsPurchased)}
+                  </span>
+                </p>
+              </div>
+
+              <form action={updateMeta} className="mt-3 flex flex-wrap items-end gap-3">
+                <input type="hidden" name="orderId" value={order.id} />
+                <label className="text-[12px] text-muted">
+                  Meta Campaign ID
+                  <input
+                    type="text"
+                    name="metaCampaignId"
+                    defaultValue={order.metaCampaignId ?? ""}
+                    className={`mt-1 block w-44 ${inputClass}`}
+                  />
+                </label>
+                <label className="text-[12px] text-muted">
+                  Meta Ad Set ID
+                  <input
+                    type="text"
+                    name="metaAdSetId"
+                    defaultValue={order.metaAdSetId ?? ""}
+                    className={`mt-1 block w-44 ${inputClass}`}
+                  />
+                </label>
+                <label className="text-[12px] text-muted">
+                  Meta Ad ID
+                  <input
+                    type="text"
+                    name="metaAdId"
+                    defaultValue={order.metaAdId ?? ""}
+                    className={`mt-1 block w-44 ${inputClass}`}
+                  />
+                </label>
+                <label className="text-[12px] text-muted">
+                  Link do anúncio
+                  <input
+                    type="url"
+                    name="metaAdUrl"
+                    placeholder="https://..."
+                    defaultValue={order.metaAdUrl ?? ""}
+                    className={`mt-1 block w-56 ${inputClass}`}
+                  />
+                </label>
+                <Button variant="outline" className="h-10 px-4 text-[13px]">
+                  Guardar
+                </Button>
+              </form>
             </div>
           </article>
         ))}

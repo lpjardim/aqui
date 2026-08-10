@@ -31,9 +31,21 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
         ← Campanhas
       </Link>
 
-      <h1 className="mt-4 text-[28px] font-black leading-tight">
-        {campaignName(user.companyName, order.zone)}
-      </h1>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-[28px] font-black leading-tight">
+          {campaignName(user.companyName, order.zone)}
+        </h1>
+        {order.metaAdUrl && (
+          <a
+            href={order.metaAdUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[13px] text-muted underline underline-offset-2 transition-colors hover:text-ink"
+          >
+            Ver anúncio ↗
+          </a>
+        )}
+      </div>
 
       <div className="mt-8 grid gap-10 md:grid-cols-[1fr_auto] md:items-start">
         <dl className="border-t border-line">

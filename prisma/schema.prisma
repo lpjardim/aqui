@@ -44,12 +44,21 @@ model Order {
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
 
+  // Integração Meta Marketing API (preenchido manualmente por agora;
+  // pensado para vir a ser sincronizado automaticamente com a Graph API).
+  metaCampaignId  String?
+  metaAdSetId     String?
+  metaAdId        String?
+  metaAdUrl       String?
+  targetReachedAt DateTime?
+
   user    User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   assets  Asset[]
   updates CampaignUpdate[]
 
   @@index([userId])
   @@index([status])
+  @@index([metaAdId])
 }
 
 model Asset {

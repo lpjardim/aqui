@@ -40,6 +40,7 @@ Sem `RESEND_API_KEY`, os emails (incluindo os magic links) são escritos na cons
 | `STORAGE_DRIVER` / `NEXT_PUBLIC_STORAGE_DRIVER` | `local` ou `vercel-blob` (valores iguais) |
 | `BLOB_READ_WRITE_TOKEN` | Token do Vercel Blob |
 | `RESEND_API_KEY`, `EMAIL_FROM` | Envio de email |
+| `INTERNAL_NOTIFICATIONS_EMAIL` | Destino de notificações internas (ex.: alvo de visualizações atingido) |
 
 ## Stripe
 
@@ -80,6 +81,26 @@ Domains qual domínio é o principal) antes de guardar o endpoint na Stripe.
 
 Trocar de fornecedor (Cloudflare R2, S3, …) é implementar a mesma interface e registá-lo em
 `src/lib/storage/index.ts`.
+
+## Integração Meta Marketing API (preparação)
+
+A `Order` já tem os campos `metaCampaignId`, `metaAdSetId`, `metaAdId`, `metaAdUrl` e
+`targetReachedAt`, preenchíveis manualmente na secção "Meta" do `/admin`. Ainda não há
+OAuth/credenciais Meta nem chamadas à Graph API.
+
+`src/lib/meta.ts` já tem a arquitetura pronta para quando isso existir:
+
+- `fetchMetaDeliveredViews(metaAdId)` — stub que vai fazer o pedido real à Ads Insights API;
+  hoje lança erro de propósito.
+- `applyDeliveredViews(orderId, delivered)` — lógica real: atualiza
+  `visualizationsDelivered`, regista `CampaignUpdate` e, ao atingir `visualizationsPurchased`
+  pela primeira vez, guarda `targetReachedAt` e envia uma notificação interna
+  (`INTERNAL_NOTIFICATIONS_EMAIL`). Nunca pausa a campanha automaticamente.
+- `syncActiveCampaigns()` — ponto de entrada pensado para um futuro job/cron que percorre
+  encomendas `ACTIVE` com `metaAdId` definido.
+
+Falta apenas: autenticação Meta, implementar `fetchMetaDeliveredViews` e agendar
+`syncActiveCampaigns` (Vercel Cron ou equivalente).
 
 ## Autenticação
 
