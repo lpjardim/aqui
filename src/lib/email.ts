@@ -42,6 +42,8 @@ export async function sendLoginEmail(to: string, link: string): Promise<void> {
       "",
       link,
       "",
+      "Expirou? Pedir novo link de acesso em https://aqui.network/entrar.",
+      "",
       "Se não pediu este acesso, ignore este email.",
       "",
       "Aqui.",
