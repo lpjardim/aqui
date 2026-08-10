@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { ZONES } from "@/lib/zones";
 import { PACKS } from "@/lib/packs";
-import { formatNumber } from "@/lib/format";
+import { formatDate, formatNumber } from "@/lib/format";
+import type { Order, User } from "@/generated/prisma/client";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 export const orderInputSchema = z.object({
@@ -47,6 +48,24 @@ export const CUSTOMER_STATUS_LABELS: Record<OrderStatus, string> = {
 
 export function campaignName(companyName: string, zone: string): string {
   return `${companyName} — ${zone}`;
+}
+
+type OrderForMetaName = Pick<Order, "id" | "zone" | "createdAt"> & {
+  user: Pick<User, "companyName">;
+};
+
+/**
+ * Nome determinístico esperado para a campanha Meta correspondente a uma
+ * encomenda: `{empresa} — {zona} — {data} — {shortOrderId}`.
+ *
+ * `shortOrderId` (últimos 4 caracteres do Order ID, em maiúsculas) garante
+ * unicidade quando o mesmo cliente compra duas campanhas na mesma zona no
+ * mesmo dia. Este nome é apenas interno/técnico para localizar a campanha na
+ * Meta — nunca é mostrado ao cliente como título da campanha.
+ */
+export function getExpectedMetaCampaignName(order: OrderForMetaName): string {
+  const shortOrderId = order.id.slice(-4).toUpperCase();
+  return `${order.user.companyName} — ${order.zone} — ${formatDate(order.createdAt)} — ${shortOrderId}`;
 }
 
 export function checkoutLineName(visualizations: number, zone: string): string {

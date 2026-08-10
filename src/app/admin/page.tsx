@@ -3,19 +3,14 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { isAdmin } from "@/lib/auth";
 import { formatDate, formatDateTime, formatNumber, formatPrice } from "@/lib/format";
-import { STATUS_LABELS, campaignName, progress } from "@/lib/orders";
+import { STATUS_LABELS, campaignName, getExpectedMetaCampaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
+import { MetaAssociation } from "./meta-association";
 import { DeleteOrderButton } from "./delete-order-button";
-import {
-  adminLogout,
-  markCompleted,
-  updateMeta,
-  updateStatus,
-  uploadProof,
-} from "./actions";
+import { adminLogout, markCompleted, updateStatus, uploadProof } from "./actions";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 export const metadata: Metadata = {
@@ -212,49 +207,11 @@ export default async function AdminPage() {
                 </div>
               </div>
 
-              <form action={updateMeta} className="mt-3 flex flex-wrap items-end gap-3">
-                <input type="hidden" name="orderId" value={order.id} />
-                <label className="text-[12px] text-muted">
-                  Meta Campaign ID
-                  <input
-                    type="text"
-                    name="metaCampaignId"
-                    defaultValue={order.metaCampaignId ?? ""}
-                    className={`mt-1 block w-44 ${inputClass}`}
-                  />
-                </label>
-                <label className="text-[12px] text-muted">
-                  Meta Ad Set ID
-                  <input
-                    type="text"
-                    name="metaAdSetId"
-                    defaultValue={order.metaAdSetId ?? ""}
-                    className={`mt-1 block w-44 ${inputClass}`}
-                  />
-                </label>
-                <label className="text-[12px] text-muted">
-                  Meta Ad ID
-                  <input
-                    type="text"
-                    name="metaAdId"
-                    defaultValue={order.metaAdId ?? ""}
-                    className={`mt-1 block w-44 ${inputClass}`}
-                  />
-                </label>
-                <label className="text-[12px] text-muted">
-                  Link do anúncio
-                  <input
-                    type="url"
-                    name="metaAdUrl"
-                    placeholder="https://..."
-                    defaultValue={order.metaAdUrl ?? ""}
-                    className={`mt-1 block w-56 ${inputClass}`}
-                  />
-                </label>
-                <Button variant="outline" className="h-10 px-4 text-[13px]">
-                  Guardar
-                </Button>
-              </form>
+              <MetaAssociation
+                orderId={order.id}
+                expectedName={getExpectedMetaCampaignName(order)}
+                metaCampaignId={order.metaCampaignId}
+              />
             </div>
           </article>
         ))}

@@ -86,32 +86,67 @@ Trocar de fornecedor (Cloudflare R2, S3, …) é implementar a mesma interface e
 
 ## Integração Meta Marketing API
 
-A `Order` tem os campos `metaCampaignId`, `metaAdSetId`, `metaAdId`, `metaAdUrl` e
-`targetReachedAt`, preenchíveis manualmente na secção "Meta" do `/admin`. Enquanto o
-`metaAdId` estiver preenchido, `visualizationsDelivered` passa a ser atualizado
-automaticamente a partir das "impressions" reportadas pela Meta Ads Insights API — não
-existe (nem deve voltar a existir) um input manual para esse valor.
+Não existe (nem deve voltar a existir) qualquer input manual de Campaign ID / Ad Set ID /
+Ad ID no `/admin`. A associação entre uma `Order` e a respetiva campanha Meta é automática,
+pelo **nome exato da campanha**:
+
+```
+getExpectedMetaCampaignName(order) = "{empresa} — {zona} — {data} — {shortOrderId}"
+```
+
+`shortOrderId` são os últimos 4 caracteres do Order ID (maiúsculas), para garantir
+unicidade caso o mesmo cliente compre duas campanhas na mesma zona no mesmo dia. Este nome
+é puramente interno/técnico — nunca é mostrado como título ao cliente.
+
+Fluxo de trabalho: criar a campanha no Ads Manager com o nome exato mostrado no `/admin`
+("Nome da campanha Meta", com botão "Copiar nome") → a Aqui. encontra-a automaticamente
+(no botão manual "Associar automaticamente" ou no cron/sync). `visualizationsDelivered`
+passa então a ser atualizado a partir das "impressions" reportadas pela Meta Ads Insights
+API.
 
 ### Como funciona
 
-`src/lib/meta.ts` concentra toda a lógica:
+`src/lib/meta.ts` concentra toda a lógica de acesso à Graph API (só leitura — `ads_read`,
+nunca cria/edita/pausa campanhas nem altera orçamentos):
 
-- `fetchMetaDeliveredViews(metaAdId)` — chama `GET /{metaAdId}/insights?fields=impressions`
-  na Graph API (versão definida por `META_GRAPH_API_VERSION`, nunca hardcoded), com timeout
-  de 8s. Nunca regista `META_ACCESS_TOKEN` em logs.
+- `findMetaCampaignsByExactName(name)` — procura campanhas em `META_AD_ACCOUNT_ID` com
+  `filtering=[{field:"name",operator:"EQUAL",value:name}]`. Só associa automaticamente
+  quando há **exatamente 1** correspondência exata; 0 mostra "Campanha ainda não
+  encontrada na Meta.", mais de 1 mostra a lista para escolha manual no `/admin`.
+- `associateOrderWithCampaign(orderId, campaignId)` — guarda `metaCampaignId` e, como
+  referência para a pré-visualização do anúncio, o primeiro ad set/anúncio encontrados
+  (`getMetaCampaignChildren`).
+- `fetchMetaImpressions(objectId)` — chama `GET /{id}/insights?fields=impressions` na
+  Graph API (versão definida por `META_GRAPH_API_VERSION`, nunca hardcoded), com timeout
+  de 8s. Nunca regista `META_ACCESS_TOKEN` em logs. Usa sempre o **nível de campanha**
+  (`metaCampaignId`) — confirmado por teste real que devolve o total agregado de todos os
+  ad sets/anúncios da campanha, sem risco de dupla contagem, mesmo havendo vários
+  anúncios/criativos na mesma campanha.
+- `getAdPreviewHtml(adId)` — Ad Previews API (`/{adId}/previews`), usada para a
+  pré-visualização "Ver anúncio" no painel do cliente. É um HTML/iframe assinado e
+  temporário: nunca é guardado na BD, é gerado de novo em cada visita à página (funciona
+  só com `ads_read`, sem precisar de permissões de Página/`pages_read_engagement`).
 - `applyDeliveredViews(orderId, impressions)` — `visualizationsDelivered` nunca desce
   (usa sempre o maior valor já conhecido) e fica sempre limitado a
   `visualizationsPurchased` (o progresso no painel nunca passa de 100%). O valor em bruto
   devolvido pela Meta fica registado em `CampaignUpdate` para auditoria, mesmo que exceda o
   comprado. Ao atingir o alvo pela primeira vez, guarda `targetReachedAt` e envia UMA
   notificação interna (`INTERNAL_NOTIFICATIONS_EMAIL`) — nunca pausa a campanha.
-- `syncActiveCampaigns()` — percorre encomendas `PAID`, `IN_REVIEW` ou `ACTIVE` com
-  `metaAdId` definido; uma falha numa encomenda não impede as restantes. Regista a hora da
-  última execução (tabela `AppSetting`), mostrada no `/admin`.
+- `syncActiveCampaigns()` — para encomendas `PAID`, `IN_REVIEW` ou `ACTIVE` sem
+  `metaCampaignId`, tenta primeiro auto-associar pelo nome esperado; depois sincroniza as
+  impressions de todas as que já têm `metaCampaignId` (ou, por compatibilidade, apenas
+  `metaAdId`). Uma falha numa encomenda não impede as restantes. Regista a hora da última
+  execução (tabela `AppSetting`), mostrada no `/admin`.
 
-Fluxo: **Meta (impressions) → `syncActiveCampaigns` → `Order.visualizationsDelivered` (BD)
-→ `/painel/campanhas/[id]` (progresso do cliente) → notificação interna ao atingir o
-alvo**.
+Fluxo: **admin cria a campanha na Meta com o nome exato → `syncActiveCampaigns`/"Associar
+automaticamente" encontra-a e guarda `metaCampaignId` → Meta (impressions ao nível da
+campanha) → `Order.visualizationsDelivered` (BD) → `/painel/campanhas/[id]` (progresso e
+pré-visualização do anúncio ao cliente) → notificação interna ao atingir o alvo**.
+
+O que continua manual: criar a campanha (com o nome certo) e os respetivos ad sets/anúncios
+no Ads Manager — a Aqui. nunca cria, edita, pausa campanhas nem altera orçamentos; e a
+escolha manual da campanha certa nos casos raros em que existe mais de 1 correspondência
+exata pelo nome.
 
 ### Disparo da sincronização
 
@@ -133,7 +168,7 @@ Variáveis de ambiente:
 | Variável | Para que serve |
 | --- | --- |
 | `META_ACCESS_TOKEN` | Token de acesso server-to-server (System User, permissão `ads_read`) |
-| `META_AD_ACCOUNT_ID` | Conta de anúncios da Aqui. (referência; a chamada de insights usa o `metaAdId` diretamente) |
+| `META_AD_ACCOUNT_ID` | Conta de anúncios da Aqui. onde se procuram as campanhas por nome exato |
 | `META_GRAPH_API_VERSION` | Versão da Graph API a usar em todos os pedidos |
 | `CRON_SECRET` | Autentica as chamadas do Vercel Cron a `/api/cron/meta-sync` |
 

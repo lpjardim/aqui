@@ -9,7 +9,13 @@ import {
   isAdmin,
 } from "@/lib/auth";
 import { buildProofKey, storage } from "@/lib/storage";
-import { syncActiveCampaigns } from "@/lib/meta";
+import {
+  associateOrderWithCampaign,
+  findMetaCampaignsByExactName,
+  syncActiveCampaigns,
+  type MetaCampaignMatch,
+} from "@/lib/meta";
+import { getExpectedMetaCampaignName } from "@/lib/orders";
 import type { OrderStatus } from "@/generated/prisma/enums";
 
 const STATUSES: OrderStatus[] = [
@@ -62,26 +68,71 @@ export async function updateStatus(formData: FormData) {
   revalidatePath("/admin");
 }
 
-export async function updateMeta(formData: FormData) {
+export type AssociateMetaState = {
+  status: "idle" | "associated" | "not_found" | "multiple" | "error";
+  message: string | null;
+  matches: MetaCampaignMatch[];
+};
+
+/**
+ * Tenta encontrar, pelo nome esperado (`getExpectedMetaCampaignName`), a
+ * campanha Meta correspondente a esta encomenda e associá-la automaticamente.
+ * Só associa quando há exatamente 1 correspondência exata — 0 ou várias
+ * ficam para decisão manual (ver `confirmMetaCampaign`).
+ */
+export async function associateMetaCampaign(
+  _previous: AssociateMetaState,
+  formData: FormData,
+): Promise<AssociateMetaState> {
   await assertAdmin();
 
-  const orderId = String(formData.get("orderId"));
-
-  const toNullable = (key: string) => {
-    const value = String(formData.get(key) ?? "").trim();
-    return value.length > 0 ? value : null;
-  };
-
-  await prisma.order.update({
+  const orderId = String(formData.get("orderId") ?? "");
+  const order = await prisma.order.findUnique({
     where: { id: orderId },
-    data: {
-      metaCampaignId: toNullable("metaCampaignId"),
-      metaAdSetId: toNullable("metaAdSetId"),
-      metaAdId: toNullable("metaAdId"),
-      metaAdUrl: toNullable("metaAdUrl"),
-    },
+    include: { user: true },
   });
 
+  if (!order) {
+    return { status: "error", message: "Encomenda não encontrada.", matches: [] };
+  }
+
+  try {
+    const expectedName = getExpectedMetaCampaignName(order);
+    const matches = await findMetaCampaignsByExactName(expectedName);
+
+    if (matches.length === 0) {
+      return { status: "not_found", message: "Campanha ainda não encontrada na Meta.", matches: [] };
+    }
+
+    if (matches.length > 1) {
+      return {
+        status: "multiple",
+        message: `Foram encontradas ${matches.length} campanhas com este nome exato. Escolha manualmente:`,
+        matches,
+      };
+    }
+
+    await associateOrderWithCampaign(order.id, matches[0].id);
+    revalidatePath("/admin");
+    return { status: "associated", message: "Campanha associada com sucesso.", matches: [] };
+  } catch (error) {
+    return {
+      status: "error",
+      message: error instanceof Error ? error.message : "Erro desconhecido ao associar.",
+      matches: [],
+    };
+  }
+}
+
+/** Associação manual quando `associateMetaCampaign` encontrou mais de 1 correspondência. */
+export async function confirmMetaCampaign(formData: FormData) {
+  await assertAdmin();
+
+  const orderId = String(formData.get("orderId") ?? "");
+  const campaignId = String(formData.get("campaignId") ?? "");
+  if (!orderId || !campaignId) return;
+
+  await associateOrderWithCampaign(orderId, campaignId);
   revalidatePath("/admin");
 }
 

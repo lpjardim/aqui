@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { Download } from "@/components/icons";
+import { AdPreviewToggle } from "@/components/painel/ad-preview-toggle";
 import { ProgressRing } from "@/components/painel/progress-ring";
 import { StatusPill } from "@/components/painel/status-pill";
 import { buttonClasses } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/auth";
 import { formatDate, formatNumber } from "@/lib/format";
+import { getAdPreviewHtml, getMetaCampaignChildren } from "@/lib/meta";
 import { campaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 
@@ -24,6 +26,7 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
   const percent = progress(order.visualizationsDelivered, order.visualizationsPurchased);
   const remaining = Math.max(0, order.visualizationsPurchased - order.visualizationsDelivered);
   const completed = order.status === "COMPLETED";
+  const adPreview = await loadAdPreview(order.metaCampaignId, order.metaAdId);
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -35,15 +38,19 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
         <h1 className="text-[28px] font-black leading-tight">
           {campaignName(user.companyName, order.zone)} — {formatDate(order.createdAt)}
         </h1>
-        {order.metaAdUrl && (
-          <a
-            href={order.metaAdUrl}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[13px] text-muted underline underline-offset-2 transition-colors hover:text-ink"
-          >
-            Ver anúncio ↗
-          </a>
+        {adPreview ? (
+          <AdPreviewToggle label={adPreview.label} html={adPreview.html} />
+        ) : (
+          order.metaAdUrl && (
+            <a
+              href={order.metaAdUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[13px] text-muted underline underline-offset-2 transition-colors hover:text-ink"
+            >
+              Ver anúncio ↗
+            </a>
+          )
         )}
       </div>
 
@@ -96,6 +103,40 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
       </div>
     </div>
   );
+}
+
+/**
+ * Gera, no servidor e na hora, a pré-visualização de um anúncio da campanha
+ * (Ad Previews API) — nunca é guardada na BD, porque o URL assinado
+ * devolvido pela Meta expira. Falha em silêncio (devolve `null`) para nunca
+ * partir a página do cliente por uma indisponibilidade da Meta.
+ */
+async function loadAdPreview(
+  metaCampaignId: string | null,
+  metaAdId: string | null,
+): Promise<{ label: string; html: string } | null> {
+  if (!metaCampaignId && !metaAdId) return null;
+
+  try {
+    let adId = metaAdId;
+    let adCount = adId ? 1 : 0;
+
+    if (metaCampaignId) {
+      const children = await getMetaCampaignChildren(metaCampaignId);
+      adCount = children.ads.length;
+      adId = children.ads[0]?.id ?? adId;
+    }
+
+    if (!adId) return null;
+
+    const html = await getAdPreviewHtml(adId);
+    if (!html) return null;
+
+    return { label: adCount > 1 ? "Ver anúncios" : "Ver anúncio", html };
+  } catch (error) {
+    console.error("[painel] falha ao gerar pré-visualização do anúncio:", error);
+    return null;
+  }
 }
 
 function Row({ label, value }: { label: string; value: React.ReactNode }) {
