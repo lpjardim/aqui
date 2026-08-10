@@ -3,7 +3,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { isAdmin } from "@/lib/auth";
 import { formatDate, formatDateTime, formatNumber, formatPrice } from "@/lib/format";
-import { STATUS_LABELS, progress } from "@/lib/orders";
+import { STATUS_LABELS, campaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { AdminLogin } from "./admin-login";
@@ -82,9 +82,13 @@ export default async function AdminPage() {
           >
             <header className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <h2 className="text-[17px] font-bold">{order.user.companyName}</h2>
+                <h2 className="text-[17px] font-bold">
+                  {campaignName(order.user.companyName, order.zone)} —{" "}
+                  {formatDate(order.createdAt)}
+                </h2>
                 <p className="mt-1 text-[13px] text-muted">
-                  {order.user.name} · {order.user.email} · {order.user.phone}
+                  {order.user.companyName} · {order.user.name} · {order.user.email} ·{" "}
+                  {order.user.phone}
                 </p>
                 <p className="mt-1 text-[13px] text-muted">
                   {order.zone} · {formatNumber(order.visualizationsPurchased)} visualizações ·{" "}
