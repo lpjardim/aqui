@@ -13,6 +13,7 @@ import {
 } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
+import { getPricingExperimentReport, type VariantReport } from "@/lib/experiments";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
 import { MetaAssociation } from "./meta-association";
@@ -40,7 +41,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [orders, lastMetaSyncAt] = await Promise.all([
+  const [orders, lastMetaSyncAt, pricingReport] = await Promise.all([
     prisma.order.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -53,6 +54,7 @@ export default async function AdminPage() {
       },
     }),
     getLastMetaSyncAt(),
+    getPricingExperimentReport(),
   ]);
 
   return (
@@ -68,6 +70,8 @@ export default async function AdminPage() {
           </Button>
         </form>
       </div>
+
+      <PricingExperimentSection report={pricingReport} />
 
       <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -269,5 +273,88 @@ export default async function AdminPage() {
         {orders.length === 0 && <p className="text-[15px] text-muted">Ainda não há encomendas.</p>}
       </div>
     </main>
+  );
+}
+
+function formatRate(value: number | null): string {
+  if (value === null) return "—";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function divideOrNull(numerator: number, denominator: number): number | null {
+  if (denominator <= 0) return null;
+  return numerator / denominator;
+}
+
+function StatRow({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className="flex items-center justify-between border-b border-line/60 py-2 last:border-0">
+      <dt className="text-[13px] text-muted">{label}</dt>
+      <dd className={`text-[13px] font-semibold ${highlight ? "text-red-strong" : "text-ink"}`}>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * Resultados do A/B test da secção de preços da landing page (Variante A =
+ * split, Variante B = toggle — ver `src/lib/experiments.ts`). Tráfego de
+ * debug (`?a_variant=`/`?experiment_debug=true`) já vem excluído destes
+ * números pelo próprio `getPricingExperimentReport`.
+ */
+function PricingExperimentSection({ report }: { report: VariantReport[] }) {
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">A/B Test — Preços</h2>
+        <span className="rounded-full bg-red-strong/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-strong">
+          Experimento em curso
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        Variante A = colunas Uma vez/Mensal por card · Variante B = toggle Uma vez/Mensal acima
+        dos cards. Métrica principal: receita por visitante exposto.
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {report.map((variant) => (
+          <div key={variant.variant} className="rounded-md border border-line p-5">
+            <h3 className="text-[14px] font-bold">
+              Variante {variant.variant}{" "}
+              <span className="font-normal text-muted">
+                ({variant.variant === "B" ? "toggle" : "split"})
+              </span>
+            </h3>
+            <dl className="mt-3">
+              <StatRow label="Visitantes" value={formatNumber(variant.visitors)} />
+              <StatRow label="Cliques CTA" value={formatNumber(variant.ctaClicks)} />
+              <StatRow label="Checkouts iniciados" value={formatNumber(variant.checkoutsStarted)} />
+              <StatRow label="Encomendas criadas" value={formatNumber(variant.ordersCreated)} />
+              <StatRow label="Pagamentos concluídos" value={formatNumber(variant.paymentsCompleted)} />
+              <StatRow
+                label="Taxa checkout → pagamento"
+                value={formatRate(divideOrNull(variant.paymentsCompleted, variant.checkoutsStarted))}
+              />
+              <StatRow
+                label="Conversão (visitante → pagamento)"
+                value={formatRate(variant.purchaseConversionRate)}
+              />
+              <StatRow label="Compras uma vez" value={formatNumber(variant.oneTimePurchases)} />
+              <StatRow label="Compras mensais" value={formatNumber(variant.monthlyPurchases)} />
+              <StatRow label="% adoção mensal" value={formatRate(variant.monthlyAdoptionRate)} />
+              <StatRow label="Receita inicial" value={formatPrice(variant.revenueCents)} />
+              <StatRow
+                label="Receita por visitante"
+                value={
+                  variant.revenuePerVisitorCents !== null
+                    ? formatPrice(Math.round(variant.revenuePerVisitorCents))
+                    : "—"
+                }
+                highlight
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }

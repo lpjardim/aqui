@@ -5,6 +5,7 @@ import { calculatePrice, clampViews } from "@/lib/pricing";
 import { appUrl, getStripe, isStripeConfigured } from "@/lib/stripe";
 import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail } from "@/lib/email";
+import { getPricingContext } from "@/lib/experiments";
 
 export const runtime = "nodejs";
 
@@ -34,6 +35,10 @@ export async function POST(request: Request) {
 
     const email = input.email.trim().toLowerCase();
 
+    // Variante/visitante/debug lidos sempre das próprias cookies desta
+    // request (nunca do body) — ver `getPricingContext`.
+    const { variant: pricingVariant, isDebug: pricingExperimentDebug } = await getPricingContext();
+
     const user = await prisma.user.upsert({
       where: { email },
       create: {
@@ -56,6 +61,8 @@ export async function POST(request: Request) {
         visualizationsPurchased: views,
         price,
         billingFrequency: input.billingFrequency,
+        pricingVariant,
+        pricingExperimentDebug,
         assets: {
           create: input.assets.map((asset) => ({
             fileUrl: asset.url,

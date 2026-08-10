@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Close, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { PACKS } from "@/lib/packs";
@@ -24,6 +24,7 @@ import {
   isAcceptedMimeType,
 } from "@/lib/assets";
 import { track } from "@/lib/analytics";
+import { trackExperimentEvent } from "@/lib/experiment-tracking";
 
 const TOTAL_STEPS = 6;
 
@@ -95,17 +96,30 @@ async function uploadFile(
 export function OrderForm({
   initialViews,
   initialCustom,
+  initialFrequency = null,
 }: {
   initialViews: number | null;
   initialCustom: boolean;
+  /** Vem do toggle da Variante B do A/B test de preços — pré-seleciona o passo 4 sem o saltar. */
+  initialFrequency?: BillingFrequency | null;
 }) {
   const [step, setStep] = useState(1);
   const [zone, setZone] = useState("");
   const [assets, setAssets] = useState<AssetItem[]>([]);
   const [views, setViews] = useState<number | null>(initialViews);
   const [customVolume, setCustomVolume] = useState(initialCustom);
-  const [frequency, setFrequency] = useState<BillingFrequency | null>(null);
+  const [frequency, setFrequency] = useState<BillingFrequency | null>(initialFrequency);
   const [contact, setContact] = useState({ name: "", companyName: "", email: "", phone: "" });
+
+  useEffect(() => {
+    trackExperimentEvent("checkout_started", {
+      views: initialViews,
+      custom: initialCustom,
+      frequency: initialFrequency,
+    });
+    // Só reportar o checkout iniciado nesta chegada ao formulário, não em cada re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);

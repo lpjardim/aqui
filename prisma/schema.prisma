@@ -27,6 +27,19 @@ enum DeliveryCycleStatus {
   COMPLETED
 }
 
+// A/B test da secção de preços da landing page — ver `src/lib/experiments.ts`.
+enum PricingVariant {
+  A
+  B
+}
+
+enum ExperimentEventType {
+  PRICING_EXPOSED
+  PRICING_CTA_CLICKED
+  PRICING_TOGGLE_CHANGED
+  CHECKOUT_STARTED
+}
+
 model User {
   id          String   @id @default(cuid())
   name        String
@@ -77,6 +90,13 @@ model Order {
   // quantos ciclos de entrega a encomenda venha a ter).
   metaActivationEmailSentAt DateTime?
 
+  // A/B test da secção de preços — variante atribuída no momento em que esta
+  // encomenda foi criada (lida da cookie `pricing_variant`, nunca do body do
+  // pedido). `null` cobre encomendas anteriores ao experimento. Tráfego de
+  // debug/interno (`experiment_debug`) fica marcado para nunca entrar nos KPIs.
+  pricingVariant         PricingVariant?
+  pricingExperimentDebug Boolean         @default(false)
+
   // --- Histórico anterior aos DeliveryCycle — mantidos apenas para não
   // perder dados de encomendas antigas (criadas antes desta migration). O
   // código novo lê/escreve exclusivamente nos campos equivalentes do
@@ -96,6 +116,7 @@ model Order {
   @@index([userId])
   @@index([status])
   @@index([metaAdId])
+  @@index([pricingVariant])
 }
 
 /**
@@ -173,6 +194,25 @@ model AppSetting {
   key       String   @id
   value     String
   updatedAt DateTime @updatedAt
+}
+
+/**
+ * Eventos do funil do A/B test de preços que acontecem ANTES de existir uma
+ * `Order` (exposição, clique no CTA, mudança do toggle, chegada ao checkout).
+ * Eventos financeiros (`order_created`/`payment_completed`) não são gravados
+ * aqui — lêem-se sempre da própria `Order`/Stripe, nunca do cliente.
+ */
+model ExperimentEvent {
+  id        String              @id @default(cuid())
+  visitorId String
+  variant   PricingVariant
+  eventType ExperimentEventType
+  metadata  Json?
+  isDebug   Boolean             @default(false)
+  createdAt DateTime            @default(now())
+
+  @@index([variant, eventType])
+  @@index([visitorId])
 }
 
 model LoginToken {
