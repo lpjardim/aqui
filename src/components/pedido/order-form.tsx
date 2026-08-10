@@ -266,9 +266,12 @@ export function OrderForm({ initialPack }: { initialPack: PackId | null }) {
         }),
       });
 
-      const data = await response.json();
+      // Se o servidor devolver algo que não é JSON (ex.: erro 500 genérico),
+      // não deixar o Safari lançar "The string did not match the expected
+      // pattern." — mostrar sempre uma mensagem compreensível.
+      const data: { url?: string; error?: string } = await response.json().catch(() => ({}));
 
-      if (!response.ok) {
+      if (!response.ok || !data.url) {
         throw new Error(data.error ?? "Não foi possível continuar para o pagamento.");
       }
 
