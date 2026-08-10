@@ -5,7 +5,7 @@ import { ProgressRing } from "@/components/painel/progress-ring";
 import { StatusPill } from "@/components/painel/status-pill";
 import { buttonClasses } from "@/components/ui/button";
 import { getCurrentUser } from "@/lib/auth";
-import { formatNumber } from "@/lib/format";
+import { formatDate, formatNumber } from "@/lib/format";
 import { campaignName, progress } from "@/lib/orders";
 import { prisma } from "@/lib/prisma";
 
@@ -33,7 +33,7 @@ export default async function CampanhaPage({ params }: { params: Promise<{ id: s
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-[28px] font-black leading-tight">
-          {campaignName(user.companyName, order.zone)}
+          {campaignName(user.companyName, order.zone)} — {formatDate(order.createdAt)}
         </h1>
         {order.metaAdUrl && (
           <a
