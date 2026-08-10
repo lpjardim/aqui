@@ -16,6 +16,26 @@ function secret(): string {
   return value;
 }
 
+/**
+ * Domínio da cookie, sem o `www.` — assim a sessão funciona tanto em
+ * `aqui.network` como em `www.aqui.network`, independente de qual dos dois
+ * for o domínio canónico na Vercel nesse momento (evita logout ao trocar
+ * entre eles, ex.: num redirect ou numa mudança de configuração de domínio).
+ * Em desenvolvimento (localhost) não define domínio nenhum.
+ */
+function cookieDomain(): string | undefined {
+  const base = process.env.NEXT_PUBLIC_APP_URL;
+  if (!base) return undefined;
+
+  try {
+    const host = new URL(base).hostname;
+    if (host === "localhost" || host === "127.0.0.1") return undefined;
+    return host.replace(/^www\./, "");
+  } catch {
+    return undefined;
+  }
+}
+
 function sign(payload: string): string {
   return createHmac("sha256", secret()).update(payload).digest("base64url");
 }
@@ -54,12 +74,13 @@ export async function createSession(userId: string): Promise<void> {
     secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: SESSION_MAX_AGE,
+    domain: cookieDomain(),
   });
 }
 
 export async function destroySession(): Promise<void> {
   const store = await cookies();
-  store.delete(SESSION_COOKIE);
+  store.delete({ name: SESSION_COOKIE, path: "/", domain: cookieDomain() });
 }
 
 export async function getCurrentUser() {
@@ -121,12 +142,13 @@ export async function createAdminSession(): Promise<void> {
     secure: process.env.NODE_ENV === "production",
     path: "/",
     maxAge: 60 * 60 * 12,
+    domain: cookieDomain(),
   });
 }
 
 export async function destroyAdminSession(): Promise<void> {
   const store = await cookies();
-  store.delete(ADMIN_COOKIE);
+  store.delete({ name: ADMIN_COOKIE, path: "/", domain: cookieDomain() });
 }
 
 export function checkAdminPassword(password: string): boolean {
