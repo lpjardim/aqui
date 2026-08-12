@@ -281,13 +281,27 @@ dados pessoais para a Meta. Pode ser reaberto em `/cookies` ("Gerir preferência
 
 - `em`/`ph`: SHA-256 depois de normalizar (email: trim + lowercase; telefone: só dígitos, sem
   zeros à esquerda, com indicativo — assume `351` para números de 9 dígitos a começar por `9`).
-- `external_id`: SHA-256 do `User.id` interno.
-- `client_ip_address`/`client_user_agent`: nunca hashed. Só enviados nos eventos que partem de
-  um pedido real ao servidor (`ViewContent`/`InitiateCheckout` via `/api/meta/track`, que lê
-  IP/UA da própria request). Os eventos de `Purchase`/`Subscribe` do webhook Stripe **não**
-  incluem `client_ip_address` — o webhook não tem acesso ao IP de quem pagou, e optámos por não
-  o guardar na Order (minimização de dados); usam `client_user_agent` guardado em
-  `Order.metaClientUserAgent` (capturado em `/api/pedido`).
+- `external_id`: SHA-256 do `User.id` interno — o mesmo id em todos os eventos da mesma pessoa
+  (`ViewContent`/`InitiateCheckout` não o enviam por não haver ainda `User` resolvido nesse
+  ponto do funil; a partir de `Purchase`/`Subscribe` já existe sempre).
+- `fn`/`ln`: SHA-256 do primeiro nome / resto do nome, derivados de `User.name` (campo único
+  "nome" já recolhido no formulário `/pedido` — nunca pedimos nome/apelido separados só para
+  isto). Só disponíveis a partir de `Purchase`/`Subscribe`.
+- `country`/`zp`: SHA-256 do país (ISO 3166-1 alpha-2) e código postal de faturação. Lidos de
+  `session.customer_details.address` (1º pagamento) / `invoice.customer_address` (renovação) —
+  **só se a Stripe já os devolver por si**. Atualmente o Checkout não pede endereço de
+  faturação (`billing_address_collection` não está definido, por omissão é `auto` e normalmente
+  não recolhe nada para pagamentos por cartão em PT), por isso estes campos ficam
+  deliberadamente `undefined` na prática. Optámos por não ativar a recolha de endereço só para
+  ganhar EMQ — isso seria pedir um novo dado ao cliente, o que a tarefa pedia para evitar. Fica
+  já ligado no código para o caso de a recolha de endereço vir a ser ativada por outro motivo
+  (ex.: IVA/faturação) no futuro.
+- `client_ip_address`/`client_user_agent`: nunca hashed. Para `ViewContent`/`InitiateCheckout`
+  (via `/api/meta/track`) vêm sempre da própria request ao servidor. Para `Purchase`/`Subscribe`
+  (webhook Stripe) vêm de `Order.metaClientIp`/`Order.metaClientUserAgent`, capturados em
+  `/api/pedido` — **nunca** do IP/user-agent que a Stripe vê (que são os servidores da própria
+  Stripe, não o browser do cliente); o webhook reutiliza o que foi guardado no momento em que o
+  cliente real fez o pedido.
 
 ### Variáveis de ambiente
 

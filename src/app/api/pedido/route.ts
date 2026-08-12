@@ -8,13 +8,7 @@ import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail } from "@/lib/email";
 import { getPricingContext } from "@/lib/experiments";
 import { hasMarketingConsent } from "@/lib/consent";
-
-function readCookie(request: Request, name: string): string | null {
-  const header = request.headers.get("cookie");
-  if (!header) return null;
-  const match = header.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : null;
-}
+import { clientIp, readCookie } from "@/lib/meta/request-context";
 
 export const runtime = "nodejs";
 
@@ -50,7 +44,9 @@ export async function POST(request: Request) {
 
     // Meta Pixel + Conversions API — capturados aqui porque este é o único
     // momento em que temos o pedido real do browser do cliente; o webhook da
-    // Stripe (que confirma o pagamento) não tem acesso a nada disto.
+    // Stripe (que confirma o pagamento) não tem acesso a nada disto — nem ao
+    // IP nem ao user-agent de quem pagou, só ao que a própria Stripe vê
+    // (os seus servidores), que não deve nunca ser usado como "client IP".
     // `metaPurchaseEventId` é gerado já agora (mesmo que o pagamento venha a
     // falhar) e fica na Order — `/checkout/sucesso` e o webhook lêem-no de
     // lá, partilhando o mesmo id entre o Pixel (browser) e a CAPI (servidor).
@@ -61,6 +57,7 @@ export async function POST(request: Request) {
       ? (readCookie(request, "_fbc") ?? readCookie(request, "_fbc_pending"))
       : null;
     const metaClientUserAgent = metaMarketingConsent ? request.headers.get("user-agent") : null;
+    const metaClientIp = metaMarketingConsent ? clientIp(request) : null;
 
     const user = await prisma.user.upsert({
       where: { email },
@@ -91,6 +88,7 @@ export async function POST(request: Request) {
         metaFbp,
         metaFbc,
         metaClientUserAgent,
+        metaClientIp,
         assets: {
           create: input.assets.map((asset) => ({
             fileUrl: asset.url,

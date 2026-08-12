@@ -31,6 +31,7 @@ type OrderWithUser = Order & { user: User };
 async function sendMetaPurchaseAndSubscribeOnce(
   order: OrderWithUser,
   amountCents: number,
+  billingAddress: Stripe.Address | null,
 ): Promise<void> {
   if (!order.metaMarketingConsent) return;
 
@@ -41,8 +42,12 @@ async function sendMetaPurchaseAndSubscribeOnce(
     email: order.user.email,
     phone: order.user.phone,
     externalId: order.userId,
+    fullName: order.user.name,
+    country: billingAddress?.country,
+    zip: billingAddress?.postal_code,
     fbp: order.metaFbp,
     fbc: order.metaFbc,
+    clientIpAddress: order.metaClientIp,
     clientUserAgent: order.metaClientUserAgent,
   };
   const customData = { value: amountCents / 100, currency: "EUR" };
@@ -78,6 +83,8 @@ async function sendMetaPurchaseAndSubscribeOnce(
 async function sendMetaRenewalPurchase(order: OrderWithUser, invoice: Stripe.Invoice): Promise<void> {
   if (!order.metaMarketingConsent) return;
 
+  const billingAddress = invoice.customer_address ?? null;
+
   await sendMetaCapiEvent({
     eventName: "Purchase",
     eventId: invoice.id ?? `${order.id}-${invoice.period_start}`,
@@ -87,8 +94,14 @@ async function sendMetaRenewalPurchase(order: OrderWithUser, invoice: Stripe.Inv
       email: order.user.email,
       phone: order.user.phone,
       externalId: order.userId,
+      fullName: order.user.name,
+      country: billingAddress?.country,
+      zip: billingAddress?.postal_code,
       fbp: order.metaFbp,
       fbc: order.metaFbc,
+      // Nunca o IP/user-agent da própria Stripe (servidor) — reutiliza-se o
+      // capturado na Order na criação do pedido (mesma pessoa, browser real).
+      clientIpAddress: order.metaClientIp,
       clientUserAgent: order.metaClientUserAgent,
     },
     customData: { value: invoice.amount_paid / 100, currency: "EUR" },
@@ -204,8 +217,9 @@ async function markAsPaid(session: Stripe.Checkout.Session) {
   // Fonte de verdade do valor: o total realmente cobrado nesta sessão
   // (nunca `order.price`, que é só o preço calculado no momento do pedido).
   const amountCents = session.amount_total ?? order.price;
+  const billingAddress = session.customer_details?.address ?? null;
   after(() =>
-    sendMetaPurchaseAndSubscribeOnce(order, amountCents).catch((error) =>
+    sendMetaPurchaseAndSubscribeOnce(order, amountCents, billingAddress).catch((error) =>
       logError("falha ao enviar Purchase/Subscribe para a Meta", error, { orderId: order.id }),
     ),
   );

@@ -103,13 +103,15 @@ model Order {
   // é partilhado entre o Pixel (em `/checkout/sucesso`) e a CAPI (no webhook)
   // para o 1º pagamento — dedup da Meta é por (event_name, event_id), por
   // isso o mesmo id serve tanto para `Purchase` como para `Subscribe`.
-  // Deliberadamente não guardamos o IP do cliente aqui (minimização de
-  // dados) — os eventos server-side de Purchase/Subscribe seguem sem
-  // `client_ip_address`, confiando em email/telefone/external_id/fbp/fbc.
+  // `metaClientIp` guarda o IP real de quem fez o pedido (nunca o IP dos
+  // servidores da Stripe, que o webhook nunca vê) — passou a ser guardado
+  // porque é um dos parâmetros de maior impacto na Event Match Quality
+  // (ver README > Meta Pixel + Conversions API > Event Match Quality).
   metaPurchaseEventId String?
   metaFbp             String?
   metaFbc             String?
   metaClientUserAgent String?
+  metaClientIp        String?
   // Consentimento de marketing (cookie `aqui_consent`) no momento em que o
   // pedido foi criado. Sem consentimento, o webhook nunca envia Purchase/
   // Subscribe para a Meta para esta encomenda — nem no 1º pagamento, nem em

@@ -15,6 +15,16 @@ import { createHash } from "node:crypto";
  * - `external_id`: qualquer identificador estável nosso (usamos o `User.id`)
  *   — hashing recomendado, não obrigatório, mas aplicamos sempre por
  *   consistência com email/telefone.
+ * - Nome próprio (`fn`) / apelido (`ln`): lowercase, sem pontuação, sem
+ *   normalizar acentos (a doc oficial aceita UTF-8), depois SHA-256.
+ *   Derivados de `User.name` (campo único "nome" do formulário) — o
+ *   primeiro token é `fn`, o resto é `ln`. Nunca pedimos nome/apelido em
+ *   campos separados só para isto.
+ * - País (`country`): lowercase, código ISO 3166-1 alpha-2, depois SHA-256.
+ * - Código postal (`zp`): lowercase, sem espaços/hífenes, depois SHA-256.
+ *   País e código postal só existem quando a própria Stripe os devolve
+ *   (endereço de faturação recolhido no Checkout) — nunca pedimos estes
+ *   campos ao cliente no nosso formulário.
  * - `fbp`/`fbc`/IP/user-agent NUNCA são hashed (ver `capi.ts`).
  */
 
@@ -58,4 +68,56 @@ export function hashPhone(phone: string | null | undefined): string | undefined 
 export function hashExternalId(id: string | null | undefined): string | undefined {
   if (!id?.trim()) return undefined;
   return sha256Hex(id.trim());
+}
+
+/** Lowercase + remove pontuação (mantém letras Unicode, dígitos e espaços). */
+function normalizeNameToken(token: string): string {
+  return token
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, "");
+}
+
+/** Divide um nome completo em (primeiro token, resto) — nunca por vírgulas/títulos. */
+function splitFullName(fullName: string): { first: string; last: string } {
+  const parts = fullName.trim().split(/\s+/);
+  return { first: parts[0] ?? "", last: parts.slice(1).join(" ") };
+}
+
+export function hashFirstName(fullName: string | null | undefined): string | undefined {
+  if (!fullName?.trim()) return undefined;
+  const { first } = splitFullName(fullName);
+  const normalized = normalizeNameToken(first);
+  if (!normalized) return undefined;
+  return sha256Hex(normalized);
+}
+
+export function hashLastName(fullName: string | null | undefined): string | undefined {
+  if (!fullName?.trim()) return undefined;
+  const { last } = splitFullName(fullName);
+  const normalized = normalizeNameToken(last);
+  if (!normalized) return undefined;
+  return sha256Hex(normalized);
+}
+
+export function normalizeCountry(country: string): string {
+  return country.trim().toLowerCase();
+}
+
+export function hashCountry(country: string | null | undefined): string | undefined {
+  if (!country?.trim()) return undefined;
+  const normalized = normalizeCountry(country);
+  if (normalized.length !== 2) return undefined; // Só aceita ISO 3166-1 alpha-2.
+  return sha256Hex(normalized);
+}
+
+export function normalizeZip(zip: string): string {
+  return zip.trim().toLowerCase().replace(/[\s-]/g, "");
+}
+
+export function hashZip(zip: string | null | undefined): string | undefined {
+  if (!zip?.trim()) return undefined;
+  const normalized = normalizeZip(zip);
+  if (!normalized) return undefined;
+  return sha256Hex(normalized);
 }

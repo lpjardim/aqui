@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { hasMarketingConsent } from "@/lib/consent";
 import { sendMetaCapiEvent } from "@/lib/meta/capi";
+import { clientIp, readCookie } from "@/lib/meta/request-context";
 
 export const runtime = "nodejs";
 
@@ -21,18 +22,6 @@ const bodySchema = z.object({
   eventId: z.string().min(1).max(200),
   eventSourceUrl: z.string().url(),
 });
-
-function clientIp(request: Request): string | null {
-  const forwardedFor = request.headers.get("x-forwarded-for");
-  return forwardedFor?.split(",")[0]?.trim() || request.headers.get("x-real-ip");
-}
-
-function readCookie(request: Request, name: string): string | null {
-  const header = request.headers.get("cookie");
-  if (!header) return null;
-  const match = header.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : null;
-}
 
 export async function POST(request: Request) {
   if (!(await hasMarketingConsent())) {

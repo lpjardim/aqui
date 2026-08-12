@@ -1,4 +1,12 @@
-import { hashEmail, hashExternalId, hashPhone } from "@/lib/meta/hash";
+import {
+  hashCountry,
+  hashEmail,
+  hashExternalId,
+  hashFirstName,
+  hashLastName,
+  hashPhone,
+  hashZip,
+} from "@/lib/meta/hash";
 
 /**
  * Cliente da Meta Conversions API — envia eventos server-side para o dataset
@@ -24,11 +32,17 @@ export type MetaUserData = {
   email?: string | null;
   phone?: string | null;
   externalId?: string | null;
+  /** Nome completo — dividido internamente em `fn` (1º token) e `ln` (resto). */
+  fullName?: string | null;
+  /** Código ISO 3166-1 alpha-2 (ex.: "PT"). Só disponível quando a Stripe devolve endereço de faturação. */
+  country?: string | null;
+  /** Código postal. Só disponível quando a Stripe devolve endereço de faturação. */
+  zip?: string | null;
   /** Nunca hashed — string crua da cookie `_fbp`. */
   fbp?: string | null;
   /** Nunca hashed — string crua da cookie `_fbc` (ou construída a partir do `fbclid`). */
   fbc?: string | null;
-  /** Nunca hashed. Omitido propositadamente nos eventos disparados pelo webhook Stripe (ver Order). */
+  /** Nunca hashed. */
   clientIpAddress?: string | null;
   /** Nunca hashed. */
   clientUserAgent?: string | null;
@@ -68,6 +82,18 @@ function buildUserData(userData: MetaUserData): Record<string, string | string[]
 
   const externalIdHash = hashExternalId(userData.externalId);
   if (externalIdHash) payload.external_id = [externalIdHash];
+
+  const fnHash = hashFirstName(userData.fullName);
+  if (fnHash) payload.fn = [fnHash];
+
+  const lnHash = hashLastName(userData.fullName);
+  if (lnHash) payload.ln = [lnHash];
+
+  const countryHash = hashCountry(userData.country);
+  if (countryHash) payload.country = [countryHash];
+
+  const zipHash = hashZip(userData.zip);
+  if (zipHash) payload.zp = [zipHash];
 
   if (userData.fbp) payload.fbp = userData.fbp;
   if (userData.fbc) payload.fbc = userData.fbc;
