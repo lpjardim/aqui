@@ -7,6 +7,7 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import {
   MAX_VIEWS,
+  MID_VIEWS,
   MIN_VIEWS,
   VIEWS_STEP,
   calculatePrice,
@@ -26,8 +27,28 @@ import {
 import { track } from "@/lib/analytics";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
 import { trackMetaEvent } from "@/lib/meta/track-client";
+import { AdPreviewMockups } from "@/components/pedido/ad-preview-mockups";
 
 const TOTAL_STEPS = 6;
+
+/**
+ * Preço de referência anterior, apenas para reforço visual da promoção do
+ * pack de 20.000 — nunca entra em `calculatePrice` nem no valor cobrado.
+ * O preço realmente cobrado continua a vir sempre de `calculatePrice`/`PACKS`.
+ */
+const PROMO_PREVIOUS_PRICE: Record<BillingFrequency, number> = {
+  ONE_TIME: 49_000,
+  MONTHLY: 39_000,
+};
+
+function PreviousPrice({ cents, suffix }: { cents: number; suffix?: string }) {
+  return (
+    <span className="whitespace-nowrap text-[13px] font-normal text-muted line-through">
+      {formatPrice(cents)}
+      {suffix}
+    </span>
+  );
+}
 
 type AssetStatus = "uploading" | "done" | "error";
 
@@ -136,6 +157,9 @@ export function OrderForm({
   const monthlyPrice = useMemo(() => (views ? calculatePrice(views, "MONTHLY") : 0), [views]);
   const monthlySavings = Math.max(0, oneTimePrice - monthlyPrice);
   const totalPrice = frequency ? (frequency === "ONE_TIME" ? oneTimePrice : monthlyPrice) : 0;
+  // Preço riscado só se aplica ao pack de 20.000 escolhido diretamente (não a
+  // um volume personalizado que coincida com esse número).
+  const isPromoSelection = !customVolume && views === MID_VIEWS;
 
   const doneAssets = useMemo(() => assets.filter((asset) => asset.status === "done"), [assets]);
   const hasPendingUploads = useMemo(
@@ -511,7 +535,12 @@ export function OrderForm({
                       </span>
                     </span>
                     <span className="flex items-center gap-3">
-                      <span className="text-[18px] font-bold">{formatPrice(option.price)}</span>
+                      <span className="flex items-baseline gap-1.5">
+                        {option.visualizations === MID_VIEWS && (
+                          <PreviousPrice cents={PROMO_PREVIOUS_PRICE.ONE_TIME} />
+                        )}
+                        <span className="text-[18px] font-bold">{formatPrice(option.price)}</span>
+                      </span>
                       <span
                         className={`grid size-5 place-items-center rounded-full border ${
                           selected ? "border-red-strong bg-red-strong text-white" : "border-line-strong"
@@ -610,7 +639,10 @@ export function OrderForm({
               >
                 <span className="block text-[16px] font-semibold">Uma vez</span>
                 <span className="flex items-center gap-3">
-                  <span className="text-[20px] font-black">{formatPrice(oneTimePrice)}</span>
+                  <span className="flex items-baseline gap-1.5">
+                    {isPromoSelection && <PreviousPrice cents={PROMO_PREVIOUS_PRICE.ONE_TIME} />}
+                    <span className="text-[20px] font-black">{formatPrice(oneTimePrice)}</span>
+                  </span>
                   <span
                     className={`grid size-5 place-items-center rounded-full border ${
                       frequency === "ONE_TIME"
@@ -641,7 +673,12 @@ export function OrderForm({
                   )}
                 </span>
                 <span className="flex items-center gap-3">
-                  <span className="text-[20px] font-black">{formatPrice(monthlyPrice)}/mês</span>
+                  <span className="flex items-baseline gap-1.5">
+                    {isPromoSelection && (
+                      <PreviousPrice cents={PROMO_PREVIOUS_PRICE.MONTHLY} suffix="/mês" />
+                    )}
+                    <span className="text-[20px] font-black">{formatPrice(monthlyPrice)}/mês</span>
+                  </span>
                   <span
                     className={`grid size-5 place-items-center rounded-full border ${
                       frequency === "MONTHLY"
@@ -715,9 +752,21 @@ export function OrderForm({
               <span className="text-[14px] text-muted">
                 {frequency === "MONTHLY" ? "Total por mês" : "Total"}
               </span>
-              <span className="text-[32px] font-black tracking-[-0.04em]">
-                {formatPrice(totalPrice)}
-                {frequency === "MONTHLY" && <span className="text-[16px]">/mês</span>}
+              <span className="flex items-baseline gap-2">
+                {isPromoSelection && (
+                  <PreviousPrice
+                    cents={
+                      frequency === "MONTHLY"
+                        ? PROMO_PREVIOUS_PRICE.MONTHLY
+                        : PROMO_PREVIOUS_PRICE.ONE_TIME
+                    }
+                    suffix={frequency === "MONTHLY" ? "/mês" : undefined}
+                  />
+                )}
+                <span className="text-[32px] font-black tracking-[-0.04em]">
+                  {formatPrice(totalPrice)}
+                  {frequency === "MONTHLY" && <span className="text-[16px]">/mês</span>}
+                </span>
               </span>
             </div>
             <p className="mt-1 text-right text-[12px] text-muted">IVA incluído</p>
@@ -742,6 +791,14 @@ export function OrderForm({
                 </div>
               ))}
             </div>
+
+            <AdPreviewMockups
+              assets={doneAssets}
+              brandName={contact.companyName}
+              views={views}
+              frequency={frequency}
+              zone={zone}
+            />
           </section>
         )}
       </div>
