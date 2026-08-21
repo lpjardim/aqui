@@ -7,6 +7,10 @@ export type VariantRawCounts = {
   visitors: number;
   ctaClicks: number;
   checkoutsStarted: number;
+  /** Cliques em "Continuar para pagamento" (passo 6), antes do POST a `/api/pedido`. */
+  paymentClicks: number;
+  /** Stripe Checkout Sessions criadas com sucesso (`session.id`/`session.url` presentes). */
+  stripeSessionsCreated: number;
   ordersCreated: number;
   paymentsCompleted: number;
   oneTimePurchases: number;
@@ -18,7 +22,15 @@ export type VariantRawCounts = {
 export type VariantRates = VariantRawCounts & {
   /** 0..1, ou `null` sem dados suficientes (nunca dividir por zero). */
   monthlyAdoptionRate: number | null;
+  /** Visitante exposto → checkout iniciado. */
   checkoutConversionRate: number | null;
+  /** Checkout iniciado → clique em pagar. */
+  checkoutToPaymentClickRate: number | null;
+  /** Clique em pagar → Stripe session criada. */
+  paymentClickToSessionRate: number | null;
+  /** Stripe session criada → pagamento concluído. */
+  sessionToPaymentRate: number | null;
+  /** Visitante exposto → pagamento concluído. */
   purchaseConversionRate: number | null;
   /** Métrica principal do teste — cêntimos por visitante exposto. */
   revenuePerVisitorCents: number | null;
@@ -37,6 +49,9 @@ export function computeVariantRates(counts: VariantRawCounts): VariantRates {
       counts.oneTimePurchases + counts.monthlyPurchases,
     ),
     checkoutConversionRate: safeDivide(counts.checkoutsStarted, counts.visitors),
+    checkoutToPaymentClickRate: safeDivide(counts.paymentClicks, counts.checkoutsStarted),
+    paymentClickToSessionRate: safeDivide(counts.stripeSessionsCreated, counts.paymentClicks),
+    sessionToPaymentRate: safeDivide(counts.paymentsCompleted, counts.stripeSessionsCreated),
     purchaseConversionRate: safeDivide(counts.paymentsCompleted, counts.visitors),
     revenuePerVisitorCents: safeDivide(counts.revenueCents, counts.visitors),
   };

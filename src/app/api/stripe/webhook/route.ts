@@ -187,6 +187,7 @@ async function markAsPaid(session: Stripe.Checkout.Session) {
       where: { id: order.id },
       data: {
         status: "PAID",
+        stripeCheckoutStatus: "COMPLETED",
         stripePaymentIntentId: paymentIntentId,
         stripeSessionId: session.id,
         ...(customerId ? { stripeCustomerId: customerId } : {}),
@@ -223,6 +224,43 @@ async function markAsPaid(session: Stripe.Checkout.Session) {
       logError("falha ao enviar Purchase/Subscribe para a Meta", error, { orderId: order.id }),
     ),
   );
+}
+
+/**
+ * A sessão de Checkout expirou sem pagamento (o cliente não voltou a tempo,
+ * ou fechou a página). Isto é só um estado técnico da Checkout Session —
+ * nunca mexe em `Order.status`: a encomenda continua `PENDING_PAYMENT` e
+ * pode voltar a gerar uma nova sessão normalmente.
+ */
+async function markAsExpired(session: Stripe.Checkout.Session): Promise<void> {
+  const orderId = session.metadata?.orderId ?? session.client_reference_id;
+
+  if (!orderId) {
+    log("sessão expirada sem orderId em metadata/client_reference_id", { sessionId: session.id });
+    return;
+  }
+
+  const order = await prisma.order.findUnique({ where: { id: orderId } });
+
+  if (!order) {
+    log("encomenda não encontrada para sessão expirada", { orderId, sessionId: session.id });
+    return;
+  }
+
+  if (order.status !== "PENDING_PAYMENT") {
+    log("sessão expirada mas encomenda já estava processada, ignorado", {
+      orderId,
+      status: order.status,
+    });
+    return;
+  }
+
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { stripeCheckoutStatus: "EXPIRED" },
+  });
+
+  log("sessão de checkout expirada", { orderId: order.id, sessionId: session.id });
 }
 
 /**
@@ -552,6 +590,10 @@ export async function POST(request: Request) {
       }
       case "checkout.session.async_payment_succeeded": {
         await markAsPaid(event.data.object);
+        break;
+      }
+      case "checkout.session.expired": {
+        await markAsExpired(event.data.object);
         break;
       }
       case "invoice.paid": {

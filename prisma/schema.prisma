@@ -38,6 +38,34 @@ enum ExperimentEventType {
   PRICING_CTA_CLICKED
   PRICING_TOGGLE_CHANGED
   CHECKOUT_STARTED
+  PAYMENT_CLICKED
+  STRIPE_SESSION_CREATED
+}
+
+// A/B test da headline do Hero da landing page — completamente independente
+// do teste de preços (cookie, tabela de eventos e enums próprios). Ver
+// `src/lib/hero-experiment.ts`.
+enum HeroVariant {
+  A
+  B
+}
+
+enum HeroEventType {
+  HERO_EXPOSED
+  HERO_CTA_CLICKED
+  CHECKOUT_STARTED
+  PAYMENT_CLICKED
+  STRIPE_SESSION_CREATED
+}
+
+// Estado técnico da própria Stripe Checkout Session — nunca confundir com
+// `Order.status` (que é o estado de negócio da encomenda). Uma sessão
+// EXPIRED não muda o status da encomenda: a Order continua PENDING_PAYMENT
+// e pode voltar a gerar uma nova sessão.
+enum StripeCheckoutStatus {
+  CREATED
+  EXPIRED
+  COMPLETED
 }
 
 model User {
@@ -63,6 +91,9 @@ model Order {
   stripeSessionId         String?     @unique
   stripePaymentIntentId   String?
   status                  OrderStatus @default(PENDING_PAYMENT)
+  // Estado técnico da Checkout Session (CREATED/EXPIRED/COMPLETED) — ver
+  // `StripeCheckoutStatus`. Independente de `status`.
+  stripeCheckoutStatus    StripeCheckoutStatus @default(CREATED)
   proofUrl                String?
   createdAt               DateTime    @default(now())
   updatedAt               DateTime    @updatedAt
@@ -96,6 +127,13 @@ model Order {
   // debug/interno (`experiment_debug`) fica marcado para nunca entrar nos KPIs.
   pricingVariant         PricingVariant?
   pricingExperimentDebug Boolean         @default(false)
+
+  // A/B test da headline do Hero — variante atribuída no momento em que esta
+  // encomenda foi criada (lida da cookie `hero_variant`, nunca do body do
+  // pedido). Independente de `pricingVariant`/`pricingExperimentDebug` acima
+  // — os dois testes correm em simultâneo mas nunca se misturam.
+  heroVariant         HeroVariant?
+  heroExperimentDebug Boolean      @default(false)
 
   // Meta Pixel + Conversions API — capturados em `/api/pedido` (único
   // momento em que temos o pedido real do browser do cliente; o webhook da
@@ -138,6 +176,7 @@ model Order {
   @@index([status])
   @@index([metaAdId])
   @@index([pricingVariant])
+  @@index([heroVariant])
 }
 
 /**
@@ -231,6 +270,27 @@ model ExperimentEvent {
   metadata  Json?
   isDebug   Boolean             @default(false)
   createdAt DateTime            @default(now())
+
+  @@index([variant, eventType])
+  @@index([visitorId])
+}
+
+/**
+ * Eventos do funil do A/B test da headline do Hero — tabela própria (nunca
+ * partilhada com `ExperimentEvent`, do teste de preços) para que os dois
+ * testes possam correr ao mesmo tempo sem se misturarem. Mesma forma e
+ * mesmas garantias: `visitorId` vem sempre da cookie `aqui_vid` (partilhada
+ * entre os dois testes, só para identificar visitantes), `variant` vem
+ * sempre da cookie `hero_variant`/`hero_debug` — nunca do cliente.
+ */
+model HeroExperimentEvent {
+  id        String        @id @default(cuid())
+  visitorId String
+  variant   HeroVariant
+  eventType HeroEventType
+  metadata  Json?
+  isDebug   Boolean       @default(false)
+  createdAt DateTime      @default(now())
 
   @@index([variant, eventType])
   @@index([visitorId])

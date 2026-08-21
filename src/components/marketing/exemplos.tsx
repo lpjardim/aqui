@@ -53,7 +53,7 @@ export function Exemplos() {
       <div className="container-page">
         <h2 className="text-[30px] font-black leading-tight sm:text-[40px]">Exemplos</h2>
         <p className="mt-3 max-w-lg text-[16px] text-muted">
-          É assim que o seu negócio pode aparecer no Instagram e Facebook de pessoas da sua zona.
+          Veja como o seu negócio pode aparecer no Instagram e Facebook de pessoas da sua zona.
         </p>
 
         <div className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

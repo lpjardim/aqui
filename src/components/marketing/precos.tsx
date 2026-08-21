@@ -16,7 +16,7 @@ export async function Precos() {
       <div className="container-page">
         <h2 className="text-[30px] font-black leading-tight sm:text-[40px]">Preços</h2>
         <p className="mt-3 max-w-md text-[16px] text-muted">
-          Escolha quantas visualizações quer comprar — uma vez ou todos os meses.
+          Comece por 49€ ou escolha quantas visualizações quer todos os meses.
         </p>
 
         {variant === "B" ? <PrecosToggle /> : <PrecosSplit />}

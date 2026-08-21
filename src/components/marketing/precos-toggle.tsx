@@ -91,6 +91,7 @@ export function PrecosToggle() {
                     </p>
                     <p className="mt-2 text-[13px] text-muted">
                       ou {formatPrice(pack.price)} uma vez
+                      {pack.id === "p2k" ? " · sem compromisso" : ""}
                     </p>
                   </>
                 ) : (
@@ -98,7 +99,9 @@ export function PrecosToggle() {
                     <p className="text-[36px] font-black leading-none tracking-[-0.04em]">
                       {formatPrice(pack.price)}
                     </p>
-                    <p className="mt-1.5 text-[13px] text-muted">pagamento único</p>
+                    <p className="mt-1.5 text-[13px] text-muted">
+                      {pack.id === "p2k" ? "Pagamento único · sem compromisso" : "pagamento único"}
+                    </p>
                     <p className="mt-2 text-[13px] text-muted">
                       ou {formatPrice(pack.monthlyPrice)}/mês
                     </p>

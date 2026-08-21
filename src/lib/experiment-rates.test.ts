@@ -6,6 +6,8 @@ function counts(overrides: Partial<VariantRawCounts> = {}): VariantRawCounts {
     visitors: 0,
     ctaClicks: 0,
     checkoutsStarted: 0,
+    paymentClicks: 0,
+    stripeSessionsCreated: 0,
     ordersCreated: 0,
     paymentsCompleted: 0,
     oneTimePurchases: 0,
@@ -61,5 +63,27 @@ describe("computeVariantRates", () => {
     const rates = computeVariantRates(counts({ visitors: 10, ctaClicks: 4 }));
     expect(rates.visitors).toBe(10);
     expect(rates.ctaClicks).toBe(4);
+  });
+
+  it("calcula as taxas do funil de pagamento (checkout → clique → sessão → pagamento)", () => {
+    const rates = computeVariantRates(
+      counts({
+        checkoutsStarted: 100,
+        paymentClicks: 60,
+        stripeSessionsCreated: 50,
+        paymentsCompleted: 20,
+      }),
+    );
+
+    expect(rates.checkoutToPaymentClickRate).toBeCloseTo(0.6);
+    expect(rates.paymentClickToSessionRate).toBeCloseTo(50 / 60);
+    expect(rates.sessionToPaymentRate).toBeCloseTo(0.4);
+  });
+
+  it("devolve null nas taxas do funil de pagamento sem denominador", () => {
+    const rates = computeVariantRates(counts());
+    expect(rates.checkoutToPaymentClickRate).toBeNull();
+    expect(rates.paymentClickToSessionRate).toBeNull();
+    expect(rates.sessionToPaymentRate).toBeNull();
   });
 });

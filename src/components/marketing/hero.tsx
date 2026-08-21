@@ -1,37 +1,64 @@
 import Image from "next/image";
 import { CheckCircle } from "@/components/icons";
 import { ButtonLink } from "@/components/ui/button";
+import { getHeroContext } from "@/lib/hero-experiment";
+import { HeroTracking } from "@/components/marketing/hero-tracking";
+import { HeroPrimaryCta } from "@/components/marketing/hero-primary-cta";
 
-const GUARANTEES = ["Sem chamadas", "Preços claros", "Comprovativo no final"];
+const GUARANTEES = ["Sem chamadas", "Visualizações garantidas", "Comprovativo da Meta"];
 
-export function Hero() {
+/**
+ * A/B test independente do teste de preços — só a headline muda entre
+ * variantes (ver `src/lib/hero-experiment.ts`). Server Component: a
+ * variante já vem atribuída pelo `middleware.ts` antes deste render, sem
+ * flicker nem troca depois de montar.
+ */
+export async function Hero() {
+  const { variant } = await getHeroContext();
+
   return (
     <section className="overflow-x-clip border-b border-line">
+      <HeroTracking />
       <div className="container-page grid items-center gap-11 py-12 md:grid-cols-2 md:gap-8 md:py-[68px]">
         <div>
           <h1 className="text-[38px] font-black leading-[1.02] sm:text-[52px] lg:text-[58px]">
-            A sua empresa.
-            <br />
-            <span className="text-red-strong">
-              À frente de pessoas
-              <br />
-              da sua zona.
-            </span>
+            {variant === "B" ? (
+              <>
+                Faça mais pessoas
+                <br />
+                <span className="text-red-strong">
+                  da sua zona conhecerem
+                  <br />o seu negócio.
+                </span>
+              </>
+            ) : (
+              <>
+                Ponha o seu negócio
+                <br />
+                <span className="text-red-strong">
+                  à frente de mais pessoas
+                  <br />
+                  da sua zona.
+                </span>
+              </>
+            )}
           </h1>
 
           <p className="mt-[22px] max-w-md text-[16px] leading-relaxed text-muted sm:text-[17px]">
-            Apareça no Instagram e Facebook para pessoas da sua zona. Simples de comprar, fácil de
-            acompanhar.
+            Publicidade no Instagram e Facebook sem ter de perceber de anúncios. Escolha a zona,
+            envie as suas fotos e nós tratamos do resto.
           </p>
 
           <div className="mt-[30px] flex flex-col gap-3 sm:flex-row">
-            <ButtonLink href="#precos" size="lg" className="w-full sm:w-auto">
-              Ver preços
-            </ButtonLink>
+            <HeroPrimaryCta />
             <ButtonLink href="#exemplos" variant="outline" size="lg" className="w-full sm:w-auto">
               Ver exemplos
             </ButtonLink>
           </div>
+
+          <p className="mt-4 text-[13px] font-semibold text-muted">
+            2.000 visualizações garantidas a partir de 49€.
+          </p>
         </div>
 
         <div className="order-last md:order-none">

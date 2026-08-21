@@ -1,17 +1,16 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { getPricingContext } from "@/lib/experiments";
-import { ExperimentEventType } from "@/generated/prisma/enums";
+import { getHeroContext } from "@/lib/hero-experiment";
+import { HeroEventType } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 
 export const runtime = "nodejs";
 
-const EVENT_MAP: Record<string, ExperimentEventType> = {
-  pricing_exposed: ExperimentEventType.PRICING_EXPOSED,
-  pricing_cta_clicked: ExperimentEventType.PRICING_CTA_CLICKED,
-  pricing_toggle_changed: ExperimentEventType.PRICING_TOGGLE_CHANGED,
-  checkout_started: ExperimentEventType.CHECKOUT_STARTED,
-  payment_clicked: ExperimentEventType.PAYMENT_CLICKED,
+const EVENT_MAP: Record<string, HeroEventType> = {
+  hero_exposed: HeroEventType.HERO_EXPOSED,
+  hero_cta_clicked: HeroEventType.HERO_CTA_CLICKED,
+  hero_checkout_started: HeroEventType.CHECKOUT_STARTED,
+  hero_payment_clicked: HeroEventType.PAYMENT_CLICKED,
 };
 
 function isPlainMetadata(value: unknown): value is Prisma.InputJsonValue {
@@ -19,10 +18,11 @@ function isPlainMetadata(value: unknown): value is Prisma.InputJsonValue {
 }
 
 /**
- * Recebe eventos do funil do A/B test de preços (`sendBeacon`/`fetch` de
- * `src/lib/experiment-tracking.ts`). A variante/visitante/debug nunca vêm do
- * corpo do pedido — são sempre lidos das cookies através de
- * `getPricingContext`, para que nada no cliente possa forjar a atribuição.
+ * Recebe eventos do funil do A/B test do Hero (`sendBeacon`/`fetch` de
+ * `src/lib/hero-experiment-tracking.ts`). Espelha `/api/experiments/track`
+ * (teste de preços), mas grava numa tabela (`HeroExperimentEvent`) e com uma
+ * cookie de variante (`hero_variant`) completamente independentes — a
+ * variante/visitante/debug nunca vêm do corpo do pedido.
  */
 export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as
@@ -35,9 +35,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ ok: false, error: "Evento inválido." }, { status: 400 });
   }
 
-  const { variant, visitorId, isDebug } = await getPricingContext();
+  const { variant, visitorId, isDebug } = await getHeroContext();
 
-  await prisma.experimentEvent.create({
+  await prisma.heroExperimentEvent.create({
     data: {
       visitorId,
       variant,

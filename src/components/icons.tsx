@@ -15,6 +15,26 @@ export function CheckCircle({ className = "size-5" }: IconProps) {
   );
 }
 
+export function Shield({ className = "size-6" }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" className={className} aria-hidden>
+      <path
+        d="M12 3.5 5 6.2v5.4c0 4.6 3 7.8 7 8.9 4-1.1 7-4.3 7-8.9V6.2L12 3.5Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+      <path
+        d="m8.7 12.2 2.4 2.3 4.2-4.7"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 export function Check({ className = "size-4" }: IconProps) {
   return (
     <svg viewBox="0 0 20 20" fill="none" className={className} aria-hidden>

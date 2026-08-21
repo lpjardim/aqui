@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Close, Plus } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { PACKS } from "@/lib/packs";
+import { PACKS, getPackByVisualizations } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import {
   MAX_VIEWS,
@@ -26,6 +26,7 @@ import {
 } from "@/lib/assets";
 import { track } from "@/lib/analytics";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackHeroExperimentEvent } from "@/lib/hero-experiment-tracking";
 import { trackMetaEvent } from "@/lib/meta/track-client";
 import { AdPreviewMockups } from "@/components/pedido/ad-preview-mockups";
 
@@ -119,11 +120,14 @@ export function OrderForm({
   initialViews,
   initialCustom,
   initialFrequency = null,
+  initialCancelled = false,
 }: {
   initialViews: number | null;
   initialCustom: boolean;
   /** Vem do toggle da Variante B do A/B test de preços — pré-seleciona o passo 4 sem o saltar. */
   initialFrequency?: BillingFrequency | null;
+  /** Voltou de `?cancelado=1` (cancel_url da Stripe) — mostra aviso, não um erro. */
+  initialCancelled?: boolean;
 }) {
   const [step, setStep] = useState(1);
   const [zone, setZone] = useState("");
@@ -135,6 +139,13 @@ export function OrderForm({
 
   useEffect(() => {
     trackExperimentEvent("checkout_started", {
+      views: initialViews,
+      custom: initialCustom,
+      frequency: initialFrequency,
+    });
+    // Mesmo momento do funil, reportado também para o teste independente do
+    // Hero (`hero_variant`) — ver `src/lib/hero-experiment-tracking.ts`.
+    trackHeroExperimentEvent("hero_checkout_started", {
       views: initialViews,
       custom: initialCustom,
       frequency: initialFrequency,
@@ -315,6 +326,23 @@ export function OrderForm({
       setError("Aguarde a conclusão dos uploads.");
       return;
     }
+
+    // Disparado exatamente no clique em "Continuar para pagamento", antes do
+    // POST a `/api/pedido` — distingue este momento da simples chegada ao
+    // formulário (`checkout_started`).
+    trackExperimentEvent("payment_clicked", {
+      views,
+      billingFrequency: frequency,
+      price: totalPrice,
+      packId: getPackByVisualizations(views)?.id ?? null,
+    });
+    trackHeroExperimentEvent("hero_payment_clicked", {
+      views,
+      billingFrequency: frequency,
+      price: totalPrice,
+      packId: getPackByVisualizations(views)?.id ?? null,
+    });
+
     setSubmitting(true);
     setError(null);
 
@@ -353,6 +381,15 @@ export function OrderForm({
 
   return (
     <div className="mx-auto w-full max-w-xl">
+      {initialCancelled && (
+        <div className="mb-6 rounded-md border border-line bg-surface px-4 py-3">
+          <p className="text-[14px] font-semibold">Pagamento não concluído</p>
+          <p className="mt-1 text-[13px] text-muted">
+            A sua campanha ainda não foi ativada. Pode tentar novamente o pagamento.
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center justify-between text-[13px] text-muted">
         <span>
           Passo {step} de {TOTAL_STEPS}

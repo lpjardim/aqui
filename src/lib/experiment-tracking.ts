@@ -14,7 +14,8 @@ export type ExperimentEventName =
   | "pricing_exposed"
   | "pricing_cta_clicked"
   | "pricing_toggle_changed"
-  | "checkout_started";
+  | "checkout_started"
+  | "payment_clicked";
 
 export function trackExperimentEvent(
   event: ExperimentEventName,

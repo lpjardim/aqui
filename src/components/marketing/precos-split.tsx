@@ -52,7 +52,9 @@ export function PrecosSplit() {
                 <p className="text-[22px] font-black leading-none tracking-[-0.03em]">
                   {formatPrice(pack.price)}
                 </p>
-                <p className="text-[12px] text-muted">pagamento único</p>
+                <p className="text-[12px] text-muted">
+                  {pack.id === "p2k" ? "Pagamento único · sem compromisso" : "pagamento único"}
+                </p>
               </div>
 
               <div className="relative flex h-px w-full items-center justify-center bg-line sm:h-auto sm:w-px sm:self-stretch">

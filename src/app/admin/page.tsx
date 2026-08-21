@@ -14,6 +14,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { getPricingExperimentReport, type VariantReport } from "@/lib/experiments";
+import { getHeroExperimentReport, type HeroVariantReport } from "@/lib/hero-experiment";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
 import { MetaAssociation } from "./meta-association";
@@ -41,7 +42,7 @@ export default async function AdminPage() {
     );
   }
 
-  const [orders, lastMetaSyncAt, pricingReport] = await Promise.all([
+  const [orders, lastMetaSyncAt, pricingReport, heroReport] = await Promise.all([
     prisma.order.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -55,6 +56,7 @@ export default async function AdminPage() {
     }),
     getLastMetaSyncAt(),
     getPricingExperimentReport(),
+    getHeroExperimentReport(),
   ]);
 
   return (
@@ -72,6 +74,8 @@ export default async function AdminPage() {
       </div>
 
       <PricingExperimentSection report={pricingReport} />
+
+      <HeroExperimentSection report={heroReport} />
 
       <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -328,8 +332,29 @@ function PricingExperimentSection({ report }: { report: VariantReport[] }) {
               <StatRow label="Visitantes" value={formatNumber(variant.visitors)} />
               <StatRow label="Cliques CTA" value={formatNumber(variant.ctaClicks)} />
               <StatRow label="Checkouts iniciados" value={formatNumber(variant.checkoutsStarted)} />
+              <StatRow label="Cliques em pagar" value={formatNumber(variant.paymentClicks)} />
+              <StatRow
+                label="Stripe sessions criadas"
+                value={formatNumber(variant.stripeSessionsCreated)}
+              />
               <StatRow label="Encomendas criadas" value={formatNumber(variant.ordersCreated)} />
               <StatRow label="Pagamentos concluídos" value={formatNumber(variant.paymentsCompleted)} />
+              <StatRow
+                label="Visitante → checkout iniciado"
+                value={formatRate(variant.checkoutConversionRate)}
+              />
+              <StatRow
+                label="Checkout iniciado → clique em pagar"
+                value={formatRate(variant.checkoutToPaymentClickRate)}
+              />
+              <StatRow
+                label="Clique em pagar → Stripe session criada"
+                value={formatRate(variant.paymentClickToSessionRate)}
+              />
+              <StatRow
+                label="Stripe session criada → pagamento"
+                value={formatRate(variant.sessionToPaymentRate)}
+              />
               <StatRow
                 label="Taxa checkout → pagamento"
                 value={formatRate(divideOrNull(variant.paymentsCompleted, variant.checkoutsStarted))}
@@ -349,6 +374,74 @@ function PricingExperimentSection({ report }: { report: VariantReport[] }) {
                     ? formatPrice(Math.round(variant.revenuePerVisitorCents))
                     : "—"
                 }
+                highlight
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Resultados do A/B test da headline do Hero da landing page (Variante A =
+ * "Ponha o seu negócio à frente...", Variante B = "Faça mais pessoas... " —
+ * ver `src/lib/hero-experiment.ts`). Completamente independente do teste de
+ * preços acima: cookie, tabela de eventos e campos na `Order` próprios.
+ * Tráfego de debug (`?h_variant=`/`?experiment_debug=true`) já vem excluído
+ * destes números.
+ */
+function HeroExperimentSection({ report }: { report: HeroVariantReport[] }) {
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">A/B Test — Hero</h2>
+        <span className="rounded-full bg-red-strong/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-strong">
+          Experimento em curso
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        Variante A = &quot;Ponha o seu negócio à frente de mais pessoas da sua zona.&quot; ·
+        Variante B = &quot;Faça mais pessoas da sua zona conhecerem o seu negócio.&quot; Resto do
+        Hero é igual nas duas. Métrica principal: taxa visitante → pagamento.
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {report.map((variant) => (
+          <div key={variant.variant} className="rounded-md border border-line p-5">
+            <h3 className="text-[14px] font-bold">Hero {variant.variant}</h3>
+            <dl className="mt-3">
+              <StatRow label="Visitantes" value={formatNumber(variant.visitors)} />
+              <StatRow label="Cliques no CTA principal" value={formatNumber(variant.ctaClicks)} />
+              <StatRow label="Entradas em /pedido" value={formatNumber(variant.checkoutsStarted)} />
+              <StatRow label="Cliques em pagar" value={formatNumber(variant.paymentClicks)} />
+              <StatRow
+                label="Stripe sessions criadas"
+                value={formatNumber(variant.stripeSessionsCreated)}
+              />
+              <StatRow label="Encomendas criadas" value={formatNumber(variant.ordersCreated)} />
+              <StatRow label="Pagamentos concluídos" value={formatNumber(variant.paymentsCompleted)} />
+              <StatRow label="Visitante → clique no CTA" value={formatRate(variant.ctaClickRate)} />
+              <StatRow
+                label="Visitante → entrada em /pedido"
+                value={formatRate(variant.checkoutConversionRate)}
+              />
+              <StatRow
+                label="Entrada em /pedido → clique em pagar"
+                value={formatRate(variant.checkoutToPaymentClickRate)}
+              />
+              <StatRow
+                label="Clique em pagar → Stripe session criada"
+                value={formatRate(variant.paymentClickToSessionRate)}
+              />
+              <StatRow
+                label="Stripe session criada → pagamento"
+                value={formatRate(variant.sessionToPaymentRate)}
+              />
+              <StatRow
+                label="Visitante → pagamento"
+                value={formatRate(variant.purchaseConversionRate)}
                 highlight
               />
             </dl>

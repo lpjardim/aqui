@@ -12,14 +12,17 @@ export const metadata: Metadata = {
 export default async function PedidoPage({
   searchParams,
 }: {
-  searchParams: Promise<{ pack?: string; custom?: string; freq?: string }>;
+  searchParams: Promise<{ pack?: string; custom?: string; freq?: string; cancelado?: string }>;
 }) {
-  const { pack, custom, freq } = await searchParams;
+  const { pack, custom, freq, cancelado } = await searchParams;
   const initialViews = getPack(pack)?.visualizations ?? null;
   const initialCustom = custom === "1";
   // Só chega aqui na Variante B do A/B test de preços, quando o toggle
   // "Uma vez"/"Mensal" já tinha uma frequência escolhida no clique do CTA.
   const initialFrequency = freq === "ONE_TIME" || freq === "MONTHLY" ? freq : null;
+  // Vem do `cancel_url` da Stripe Checkout (ver `/api/pedido`) — o utilizador
+  // cancelou ou saiu do checkout sem pagar.
+  const initialCancelled = cancelado === "1";
 
   return (
     <div className="min-h-dvh">
@@ -36,6 +39,7 @@ export default async function PedidoPage({
           initialViews={initialViews}
           initialCustom={initialCustom}
           initialFrequency={initialFrequency}
+          initialCancelled={initialCancelled}
         />
       </main>
     </div>

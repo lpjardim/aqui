@@ -1,23 +1,23 @@
 const FAQS = [
   {
     q: "O que são visualizações?",
-    a: "Cada visualização corresponde a uma vez que a sua foto ou vídeo foi mostrado a uma pessoa no Instagram ou Facebook.",
+    a: "Cada visualização corresponde a uma vez que o seu anúncio é mostrado no Instagram ou Facebook. Escolhe quantas quer comprar e nós tratamos da entrega na zona selecionada.",
   },
   {
     q: "Mas isto vai trazer-me clientes?",
-    a: "Pode trazer, mas não é isso que estamos a vender. A Aqui. garante que o seu negócio é mostrado o número de vezes que comprou, na zona escolhida. O resultado comercial depende também da sua oferta, do seu negócio e do seu anúncio.",
+    a: "O objetivo é pôr o seu negócio à frente de mais pessoas da zona que escolheu. Isso pode gerar visitas, contactos ou vendas, mas esses resultados dependem também do negócio, da oferta e do anúncio. O que a Aqui. garante é a entrega das visualizações contratadas.",
   },
   {
     q: "Posso escolher onde quero aparecer?",
-    a: "Sim. Pode escolher Portugal inteiro ou um distrito. O anúncio aparece no Instagram e Facebook de pessoas nessa zona.",
+    a: "Sim. Escolhe a zona onde quer que o anúncio apareça e nós tratamos da segmentação. Pode escolher Portugal inteiro ou um distrito.",
   },
   {
     q: "Preciso de saber fazer anúncios?",
-    a: "Não. Escolhe a zona e as visualizações, envia as fotos ou vídeos, e nós tratamos do resto.",
+    a: "Não. Essa é precisamente a ideia. Escolhe a zona e as visualizações, envia as fotos ou vídeos e nós tratamos do resto.",
   },
   {
     q: "E se eu não tiver um anúncio preparado?",
-    a: "Não precisa. Envie fotos ou vídeos do seu negócio e nós tratamos do texto e da preparação do anúncio.",
+    a: "Não precisa. Envie as fotos ou vídeos do seu negócio e nós tratamos do texto e da preparação do anúncio.",
   },
   {
     q: "Quantas fotos ou vídeos posso enviar?",
@@ -33,15 +33,23 @@ const FAQS = [
   },
   {
     q: "Como sei quantas visualizações foram entregues?",
-    a: "Pode acompanhar o progresso no seu painel. No final disponibilizamos também um comprovativo da própria Meta.",
+    a: "Pode acompanhar as visualizações enquanto a campanha está ativa no seu painel. No final, recebe também um comprovativo da própria Meta.",
   },
   {
     q: "Porque não faço isto diretamente no Instagram?",
-    a: "Porque aqui não precisa de aprender a configurar campanhas, públicos ou ferramentas de publicidade. Escolhe o que quer comprar, envia o conteúdo e acompanha as visualizações.",
+    a: "Pode fazê-lo. A diferença é que Aqui. não precisa de perceber de campanhas, configurações ou ferramentas de publicidade. Escolhe a zona, envia o conteúdo e nós tratamos do resto.",
   },
   {
     q: "Garantem vendas ou contactos?",
-    a: "Não. A Aqui. vende visualizações. Garantimos a entrega das visualizações compradas, não resultados comerciais que não controlamos.",
+    a: "Não garantimos vendas ou contactos porque isso depende de fatores que não controlamos. Garantimos aquilo que compra Aqui.: o número de visualizações contratado na zona escolhida.",
+  },
+  {
+    q: "Posso comprar só uma vez?",
+    a: "Sim. Pode comprar uma campanha única, sem ficar com qualquer mensalidade.",
+  },
+  {
+    q: "Posso cancelar o plano mensal?",
+    a: "Sim, quando quiser, a partir do seu painel. O ciclo atual continua a decorrer normalmente até ao fim — só não há cobrança nem novo ciclo no mês seguinte.",
   },
 ];
 

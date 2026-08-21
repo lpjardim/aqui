@@ -1,14 +1,17 @@
 import { nanoid } from "nanoid";
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { checkoutLineName, orderInputSchema } from "@/lib/orders";
 import { calculatePrice, clampViews } from "@/lib/pricing";
 import { appUrl, getStripe, isStripeConfigured } from "@/lib/stripe";
 import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail } from "@/lib/email";
-import { getPricingContext } from "@/lib/experiments";
+import { getPricingContext, recordExperimentEvent } from "@/lib/experiments";
+import { getHeroContext, recordHeroExperimentEvent } from "@/lib/hero-experiment";
+import { ExperimentEventType, HeroEventType } from "@/generated/prisma/enums";
 import { hasMarketingConsent } from "@/lib/consent";
 import { clientIp, readCookie } from "@/lib/meta/request-context";
+import { getPackByVisualizations } from "@/lib/packs";
 
 export const runtime = "nodejs";
 
@@ -40,7 +43,19 @@ export async function POST(request: Request) {
 
     // Variante/visitante/debug lidos sempre das próprias cookies desta
     // request (nunca do body) — ver `getPricingContext`.
-    const { variant: pricingVariant, isDebug: pricingExperimentDebug } = await getPricingContext();
+    const {
+      variant: pricingVariant,
+      visitorId: pricingVisitorId,
+      isDebug: pricingExperimentDebug,
+    } = await getPricingContext();
+
+    // Teste independente da headline do Hero — mesma leitura das cookies do
+    // pedido, nunca do body (ver `getHeroContext`).
+    const {
+      variant: heroVariant,
+      visitorId: heroVisitorId,
+      isDebug: heroExperimentDebug,
+    } = await getHeroContext();
 
     // Meta Pixel + Conversions API — capturados aqui porque este é o único
     // momento em que temos o pedido real do browser do cliente; o webhook da
@@ -83,6 +98,8 @@ export async function POST(request: Request) {
         billingFrequency: input.billingFrequency,
         pricingVariant,
         pricingExperimentDebug,
+        heroVariant,
+        heroExperimentDebug,
         metaPurchaseEventId,
         metaMarketingConsent,
         metaFbp,
@@ -126,6 +143,14 @@ export async function POST(request: Request) {
     const lineName = checkoutLineName(views, input.zone);
     const description = `Campanha para ${input.companyName}`;
 
+    // `payment_method_types` fica de propósito por definir: isto ativa
+    // "dynamic payment methods" da Stripe, que decide os métodos elegíveis
+    // (cartão, MB WAY, Multibanco, ...) a partir do que estiver ativo em
+    // dashboard.stripe.com/settings/payment_methods — sem precisar de código
+    // aqui. Para ativar MB WAY basta ativá-lo lá (moeda EUR já garantida).
+    // Nota: a própria Stripe não suporta MB WAY em `mode: "subscription"`
+    // (só em `mode: "payment"`), por isso não aparece nunca no ramo MONTHLY
+    // abaixo, independentemente do que estiver ativo no Dashboard.
     const session =
       input.billingFrequency === "ONE_TIME"
         ? await stripe.checkout.sessions.create({
@@ -175,6 +200,47 @@ export async function POST(request: Request) {
       where: { id: order.id },
       data: { stripeSessionId: session.id },
     });
+
+    // Só dispara quando a Order já existe E a Stripe Session foi criada com
+    // sucesso (tem `id` e `url`) — nunca se a Stripe tiver falhado antes
+    // (nesse caso o `catch` abaixo já teria interrompido o pedido).
+    if (session.id && session.url) {
+      after(() =>
+        recordExperimentEvent({
+          eventType: ExperimentEventType.STRIPE_SESSION_CREATED,
+          variant: pricingVariant,
+          visitorId: pricingVisitorId,
+          isDebug: pricingExperimentDebug,
+          metadata: {
+            orderId: order.id,
+            packId: getPackByVisualizations(views)?.id ?? null,
+            billingFrequency: input.billingFrequency,
+            price,
+            pricingVariant,
+          },
+        }).catch((error) => {
+          console.error("[pedido] falha ao registar stripe_session_created:", error);
+        }),
+      );
+      // Mesmo evento, registado também para o teste independente do Hero.
+      after(() =>
+        recordHeroExperimentEvent({
+          eventType: HeroEventType.STRIPE_SESSION_CREATED,
+          variant: heroVariant,
+          visitorId: heroVisitorId,
+          isDebug: heroExperimentDebug,
+          metadata: {
+            orderId: order.id,
+            packId: getPackByVisualizations(views)?.id ?? null,
+            billingFrequency: input.billingFrequency,
+            price,
+            heroVariant,
+          },
+        }).catch((error) => {
+          console.error("[pedido] falha ao registar hero stripe_session_created:", error);
+        }),
+      );
+    }
 
     return NextResponse.json({ url: session.url });
   } catch (error) {
