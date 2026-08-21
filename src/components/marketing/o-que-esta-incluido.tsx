@@ -2,7 +2,9 @@ import { CheckCircle } from "@/components/icons";
 
 const ITEMS = [
   "Mais pessoas da sua zona a conhecer o seu negócio",
-  "Não precisa de perceber de anúncios",
+  "Mais presença no Instagram e Facebook sem ter de gerir anúncios",
+  "Mais oportunidades de ser lembrado quando alguém precisar do que vende",
+  "Uma campanha pronta a avançar sem perder tempo",
   "Sem reuniões nem pedidos de orçamento",
   "Acompanha tudo durante a campanha",
   "Visualizações garantidas",
