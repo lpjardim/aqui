@@ -14,9 +14,11 @@ export async function Precos() {
   return (
     <section id="precos" className="scroll-mt-16 border-b border-line py-16 md:py-24">
       <div className="container-page">
-        <h2 className="text-[30px] font-black leading-tight sm:text-[40px]">Preços</h2>
+        <h2 className="text-[30px] font-black leading-tight sm:text-[40px]">
+          Escolha entre uma campanha única ou um plano mensal
+        </h2>
         <p className="mt-3 max-w-md text-[16px] text-muted">
-          Comece por 49€ ou escolha quantas visualizações quer todos os meses.
+          2.000 visualizações desde 39€/mês ou 49€ numa campanha única.
         </p>
 
         {variant === "B" ? <PrecosToggle /> : <PrecosSplit />}
