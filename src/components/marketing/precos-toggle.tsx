@@ -86,7 +86,7 @@ export function PrecosToggle() {
                       {formatPrice(pack.monthlyPrice)}
                       <span className="text-[14px] font-semibold text-red-strong/70">/mês</span>
                     </p>
-                    <p className="mt-1.5 text-[13px] font-semibold text-red-strong">
+                    <p className="mt-1.5 text-[13px] font-semibold text-ink">
                       Poupa {formatPrice(savings)}/mês
                     </p>
                     <p className="mt-2 text-[13px] text-muted">

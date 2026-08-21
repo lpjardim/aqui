@@ -75,7 +75,7 @@ export function PrecosSplit() {
                   <span className="text-[12px] font-semibold text-red-strong/70">/mês</span>
                 </p>
                 <p className="text-[12px] text-muted">todos os meses</p>
-                <p className="text-[12px] font-semibold text-red-strong">
+                <p className="text-[12px] font-semibold text-ink">
                   Poupa {formatPrice(savings)}/mês
                 </p>
               </div>
