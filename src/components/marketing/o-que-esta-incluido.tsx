@@ -1,14 +1,13 @@
 import { CheckCircle } from "@/components/icons";
 
 const ITEMS = [
-  "Configuração da campanha",
-  "Segmentação da zona escolhida",
-  "Preparação do anúncio",
-  "Texto do anúncio",
-  "Publicação no Instagram e Facebook",
-  "Acompanhamento no painel durante a campanha",
+  "Mais pessoas da sua zona a conhecer o seu negócio",
+  "Não precisa de perceber de anúncios",
+  "Sem reuniões nem pedidos de orçamento",
+  "Acompanha tudo durante a campanha",
+  "Visualizações garantidas",
   "Comprovativo da Meta no final",
-  "Visualizações contratadas garantidas",
+  "Comece a partir de 39€",
 ];
 
 /**
