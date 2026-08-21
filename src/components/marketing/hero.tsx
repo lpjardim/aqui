@@ -57,7 +57,7 @@ export async function Hero() {
           </div>
 
           <p className="mt-4 text-[13px] font-semibold text-muted">
-            2.000 visualizações garantidas por 49€.
+            2.000 visualizações garantidas a partir de 39€.
           </p>
         </div>
 

@@ -30,7 +30,7 @@ export function Navbar() {
         </nav>
 
         <ButtonLink href="#precos" size="md" className="h-10 px-4 text-sm">
-          Ver preços
+          Começar por 39€
         </ButtonLink>
       </div>
     </header>

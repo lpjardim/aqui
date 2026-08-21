@@ -17,7 +17,7 @@ export function HeroPrimaryCta() {
       className="w-full sm:w-auto"
       onClick={() => trackHeroExperimentEvent("hero_cta_clicked")}
     >
-      Começar por 49€
+      Começar por 39€
     </ButtonLink>
   );
 }
