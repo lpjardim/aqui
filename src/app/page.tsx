@@ -7,10 +7,12 @@ import { Garantia } from "@/components/marketing/garantia";
 import { Exemplos } from "@/components/marketing/exemplos";
 import { Faq } from "@/components/marketing/faq";
 import { Footer } from "@/components/marketing/footer";
+import { MetaLandingView } from "@/components/marketing/meta-landing-view";
 
 export default function HomePage() {
   return (
     <>
+      <MetaLandingView />
       <Navbar />
       <main>
         <Hero />

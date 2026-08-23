@@ -1,9 +1,7 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
 import Script from "next/script";
-import { CONSENT_CHANGED_EVENT } from "@/components/consent/cookie-banner";
-import { CONSENT_COOKIE, CONSENT_GRANTED } from "@/lib/consent-constants";
+import { useMarketingConsentGranted } from "@/lib/meta/use-marketing-consent";
 
 declare global {
   interface Window {
@@ -12,32 +10,17 @@ declare global {
   }
 }
 
-function readConsentCookie(): string | null {
-  if (typeof document === "undefined") return null;
-  const match = document.cookie.match(new RegExp(`(?:^|; )${CONSENT_COOKIE}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]) : null;
-}
-
-function subscribeToConsentChanges(callback: () => void): () => void {
-  window.addEventListener(CONSENT_CHANGED_EVENT, callback);
-  return () => window.removeEventListener(CONSENT_CHANGED_EVENT, callback);
-}
-
-function getServerConsentSnapshot(): string | null {
-  return null;
-}
-
 /**
  * Carrega o Pixel da Meta (`fbevents.js`) só depois de consentimento de
- * marketing — nunca antes. Não chama `fbq('track', 'PageView')` automático:
- * só disparamos os 4 eventos pedidos (ViewContent, InitiateCheckout,
- * Purchase, Subscribe), nunca PageView, que não tem utilidade para o funil
- * da Aqui. e não foi pedido.
+ * marketing — nunca antes. Não importa `track-client.ts`/
+ * `use-fire-meta-event.ts` de propósito (evitaria uma dependência circular,
+ * já que esses módulos importam `fireMetaPixelEvent` daqui) — quem dispara o
+ * `PageView` é o componente irmão `MetaPageView` (ver mais abaixo), montado
+ * junto deste no layout.
  */
 export function MetaPixel() {
   const pixelId = process.env.NEXT_PUBLIC_META_PIXEL_ID;
-  const consent = useSyncExternalStore(subscribeToConsentChanges, readConsentCookie, getServerConsentSnapshot);
-  const granted = consent === CONSENT_GRANTED;
+  const granted = useMarketingConsentGranted();
 
   if (!pixelId || !granted) return null;
 
@@ -65,7 +48,7 @@ export function MetaPixel() {
  * script ainda a carregar) — nunca lança.
  */
 export function fireMetaPixelEvent(
-  eventName: "ViewContent" | "InitiateCheckout" | "Purchase" | "Subscribe",
+  eventName: "PageView" | "ViewContent" | "InitiateCheckout" | "Purchase" | "Subscribe",
   params: Record<string, unknown> | undefined,
   eventId: string,
 ): void {

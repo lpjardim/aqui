@@ -5,7 +5,6 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
-import { trackMetaEvent } from "@/lib/meta/track-client";
 
 /**
  * Variante A do A/B test de preços — design "split": cada card mostra as
@@ -13,11 +12,13 @@ import { trackMetaEvent } from "@/lib/meta/track-client";
  * frequência só é escolhida no checkout (passo 4); o CTA aqui só decide o
  * volume. Heading/subtítulo/"Precisa de outro volume?" vivem em
  * `precos.tsx`, idênticos em ambas as variantes.
+ *
+ * O `ViewContent` da Meta já não dispara aqui — vive em
+ * `meta-landing-view.tsx`, montado no topo da home (ver esse ficheiro).
  */
 export function PrecosSplit() {
   useEffect(() => {
     trackExperimentEvent("pricing_exposed", { layout: "split" });
-    trackMetaEvent("ViewContent");
   }, []);
 
   return (

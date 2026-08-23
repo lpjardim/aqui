@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { CookieBanner } from "@/components/consent/cookie-banner";
 import { MetaPixel } from "@/lib/meta/pixel";
+import { MetaPageView } from "@/lib/meta/page-view-tracker";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -44,6 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         {children}
         <MetaPixel />
+        <MetaPageView />
         <CookieBanner />
       </body>
     </html>

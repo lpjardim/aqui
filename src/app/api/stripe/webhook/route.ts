@@ -57,6 +57,7 @@ async function sendMetaPurchaseAndSubscribeOnce(
     eventId,
     eventSourceUrl,
     actionSource: "website",
+    origin: "webhook",
     userData,
     customData,
   });
@@ -67,6 +68,7 @@ async function sendMetaPurchaseAndSubscribeOnce(
       eventId,
       eventSourceUrl,
       actionSource: "website",
+      origin: "webhook",
       userData,
       customData,
     });
@@ -90,6 +92,7 @@ async function sendMetaRenewalPurchase(order: OrderWithUser, invoice: Stripe.Inv
     eventId: invoice.id ?? `${order.id}-${invoice.period_start}`,
     eventSourceUrl: appUrl(`/checkout/sucesso?pedido=${order.id}`),
     actionSource: "website",
+    origin: "webhook",
     userData: {
       email: order.user.email,
       phone: order.user.phone,

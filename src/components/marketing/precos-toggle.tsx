@@ -5,7 +5,6 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
-import { trackMetaEvent } from "@/lib/meta/track-client";
 import type { BillingFrequency } from "@/lib/pricing";
 
 /**
@@ -15,6 +14,9 @@ import type { BillingFrequency } from "@/lib/pricing";
  * (nunca escondido). O CTA "Escolher" leva o volume E a frequência
  * escolhida no toggle para o checkout. Heading/subtítulo/"Precisa de outro
  * volume?" vivem em `precos.tsx`, idênticos em ambas as variantes.
+ *
+ * O `ViewContent` da Meta já não dispara aqui — vive em
+ * `meta-landing-view.tsx`, montado no topo da home (ver esse ficheiro).
  */
 export function PrecosToggle() {
   const [frequency, setFrequency] = useState<BillingFrequency>("MONTHLY");
@@ -22,7 +24,6 @@ export function PrecosToggle() {
   useEffect(() => {
     // Só no mount — a mudança de toggle é reportada separadamente abaixo.
     trackExperimentEvent("pricing_exposed", { layout: "toggle", frequency: "MONTHLY" });
-    trackMetaEvent("ViewContent");
   }, []);
 
   function selectFrequency(next: BillingFrequency) {

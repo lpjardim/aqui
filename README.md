@@ -222,21 +222,39 @@ seguinte.
 
 Módulo completamente separado da Integração Meta Marketing API acima (dataset "Aqui.",
 ID `1073353675389361` no Events Manager — não confundir com "Aqui. Ads Sync", que é outra
-coisa). Só 4 eventos, sem PageView automático:
+coisa). 5 eventos:
 
 | Evento | Onde dispara | Pixel | CAPI |
 | --- | --- | --- | --- |
-| `ViewContent` | Mount da secção de preços na home (`precos-split.tsx`/`precos-toggle.tsx`) | Sim | Sim, via `/api/meta/track` |
+| `PageView` | Assim que o Pixel fica ativo (`pixel.tsx`), em qualquer página do site | Sim | Sim, via `/api/meta/track` |
+| `ViewContent` | Mount de `meta-landing-view.tsx`, montado no topo da home (`/`) | Sim | Sim, via `/api/meta/track` |
 | `InitiateCheckout` | Mount do formulário `/pedido` (mesmo ponto que `checkout_started`) | Sim | Sim, via `/api/meta/track` |
 | `Purchase` | 1º pagamento: webhook `checkout.session.completed`/`async_payment_succeeded`. Renovações mensais: webhook `invoice.paid` | Sim, só o 1º pagamento (`/checkout/sucesso`) | Sim, sempre (fonte de verdade) |
 | `Subscribe` | Só na 1ª mensalidade de uma subscrição `MONTHLY`, nunca em renovações | Sim, só o 1º pagamento (`/checkout/sucesso`) | Sim, sempre |
+
+**`PageView` ≠ `ViewContent`.** `PageView` é o sinal standard "a página carregou" — é dele
+que depende a métrica nativa "Landing Page Views" do Ads Manager (não do `ViewContent`).
+`ViewContent` é o nosso sinal de "visitou o conteúdo principal da landing", mais específico
+e não usado pela métrica nativa da Meta. Os dois coexistem sem conflito (`event_id`
+independente em cada um).
+
+### Consentimento tardio (aceitar cookies depois do 1º render)
+
+`PageView`/`ViewContent`/`InitiateCheckout` disparam através de
+`useFireMetaEventOnConsent` (`src/lib/meta/use-fire-meta-event.ts`): se o visitante ainda não
+tiver decidido sobre cookies no momento em que o componente monta, o hook espera e dispara o
+evento assim que o consentimento for concedido — mesmo que seja só segundos depois, já com o
+banner fechado. Sem isto, qualquer evento cujo efeito corresse antes da decisão de
+consentimento era perdido para sempre (o mount só acontece uma vez). Um `useRef` garante que
+nunca dispara duas vezes na mesma visita, mesmo que o visitante mude de ideias em `/cookies`.
 
 ### Deduplicação Pixel + CAPI
 
 Mesmo `event_id` nos dois lados (dedup da Meta é por `(event_name, event_id)`):
 
-- `ViewContent`/`InitiateCheckout`: `event_id` gerado no browser (`crypto.randomUUID()`),
-  usado simultaneamente no `fbq(...)` e no POST para `/api/meta/track`.
+- `PageView`/`ViewContent`/`InitiateCheckout`: `event_id` gerado no browser
+  (`crypto.randomUUID()`), usado simultaneamente no `fbq(...)` e no POST para
+  `/api/meta/track`.
 - `Purchase`/`Subscribe` do 1º pagamento: `Order.metaPurchaseEventId` (gerado com `nanoid()`
   em `/api/pedido`, antes de sequer se saber se o pagamento vai ser bem sucedido). O mesmo id
   serve para os dois eventos — não há colisão porque a dedup é por par
@@ -312,13 +330,22 @@ dados pessoais para a Meta. Pode ser reaberto em `/cookies` ("Gerir preferência
 | `META_GRAPH_API_VERSION` | Reaproveitada da Integração Meta Marketing API acima — mesma versão para os dois módulos |
 | `META_CAPI_TEST_EVENT_CODE` | Só durante testes no separador "Testar eventos" do Events Manager — nunca definida em produção |
 
+**Importante (Vercel):** confirmar que `NEXT_PUBLIC_META_PIXEL_ID`/`META_CAPI_ACCESS_TOKEN`
+estão definidas só para o ambiente "Production" no dashboard da Vercel — nunca para "Preview".
+Caso contrário, qualquer deployment de preview (branches, PRs) dispara eventos reais para o
+mesmo dataset "Aqui.", poluindo os números do Ads Manager com tráfego de testes internos.
+
 ### Ficheiros
 
 `src/lib/meta/hash.ts` (normalização + SHA-256), `src/lib/meta/capi.ts` (cliente server-side da
 Conversions API), `src/lib/meta/pixel.tsx` (carregamento do Pixel gated por consentimento +
-`fireMetaPixelEvent`), `src/lib/meta/track-client.ts` (dispara Pixel + CAPI em simultâneo com o
-mesmo `event_id`), `src/app/api/meta/track/route.ts` (proxy CAPI para `ViewContent`/
-`InitiateCheckout`), `src/lib/consent.ts` + `src/components/consent/` (consentimento).
+`fireMetaPixelEvent` + `PageView`), `src/lib/meta/track-client.ts` (dispara Pixel + CAPI em
+simultâneo com o mesmo `event_id`), `src/lib/meta/use-marketing-consent.ts` (único sítio que lê
+a cookie de consentimento no browser), `src/lib/meta/use-fire-meta-event.ts` (dispara um evento
+uma única vez, à espera de consentimento se necessário), `src/components/marketing/
+meta-landing-view.tsx` (`ViewContent` da home), `src/app/api/meta/track/route.ts` (proxy CAPI
+para `PageView`/`ViewContent`/`InitiateCheckout`), `src/lib/consent.ts` +
+`src/components/consent/` (consentimento).
 
 ## Deploy na Vercel
 

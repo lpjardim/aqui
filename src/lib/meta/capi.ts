@@ -24,7 +24,10 @@ import {
 const DEFAULT_GRAPH_API_VERSION = "v21.0";
 const FETCH_TIMEOUT_MS = 5_000;
 
-export type MetaEventName = "ViewContent" | "InitiateCheckout" | "Purchase" | "Subscribe";
+export type MetaEventName = "PageView" | "ViewContent" | "InitiateCheckout" | "Purchase" | "Subscribe";
+
+/** Origem do envio — só para os logs (nunca vai no payload enviado à Meta). */
+export type MetaCapiOrigin = "pixel-relay" | "webhook";
 
 export type MetaActionSource = "website";
 
@@ -61,6 +64,8 @@ export type MetaCapiEventInput = {
   eventTime?: Date;
   userData: MetaUserData;
   customData?: MetaCustomData;
+  /** Só para logging de debug (nunca enviado à Meta) — de onde partiu esta chamada. */
+  origin?: MetaCapiOrigin;
 };
 
 function graphApiVersion(): string {
@@ -110,6 +115,21 @@ function buildUserData(userData: MetaUserData): Record<string, string | string[]
  * endpoint de tracking) nunca veja o fluxo principal interrompido por causa
  * disto.
  */
+/**
+ * Contexto de log comum a todas as linhas — nunca inclui o access token, o
+ * `user_data` (pode ter hashes/PII) nem qualquer dado Stripe sensível. Só
+ * IDs/URLs/timestamps, seguro para debug em produção (Vercel logs).
+ */
+function logContext(input: MetaCapiEventInput): Record<string, unknown> {
+  return {
+    event: input.eventName,
+    eventId: input.eventId,
+    eventSourceUrl: input.eventSourceUrl,
+    origin: input.origin ?? "unknown",
+    at: new Date().toISOString(),
+  };
+}
+
 export async function sendMetaCapiEvent(
   input: MetaCapiEventInput,
 ): Promise<{ ok: boolean; error?: string }> {
@@ -118,7 +138,8 @@ export async function sendMetaCapiEvent(
 
   if (!pixelId || !accessToken) {
     console.warn(
-      `[meta-capi] não configurado (NEXT_PUBLIC_META_PIXEL_ID/META_CAPI_ACCESS_TOKEN em falta) — evento "${input.eventName}" ignorado`,
+      `[meta-capi] não configurado (NEXT_PUBLIC_META_PIXEL_ID/META_CAPI_ACCESS_TOKEN em falta) — evento ignorado`,
+      JSON.stringify(logContext(input)),
     );
     return { ok: false, error: "não configurado" };
   }
@@ -163,11 +184,14 @@ export async function sendMetaCapiEvent(
         (payload && typeof payload === "object" && "error" in payload
           ? (payload as { error?: { message?: string } }).error?.message
           : undefined) ?? `HTTP ${response.status}`;
-      console.error(`[meta-capi] erro ao enviar "${input.eventName}" (${input.eventId}): ${message}`);
+      console.error(
+        `[meta-capi] erro ao enviar evento: ${message}`,
+        JSON.stringify(logContext(input)),
+      );
       return { ok: false, error: message };
     }
 
-    console.log(`[meta-capi] evento enviado: ${input.eventName} (${input.eventId})`);
+    console.log("[meta-capi] evento enviado", JSON.stringify(logContext(input)));
     return { ok: true };
   } catch (error) {
     const reason =
@@ -176,7 +200,10 @@ export async function sendMetaCapiEvent(
         : error instanceof Error
           ? error.message
           : "erro de rede desconhecido";
-    console.error(`[meta-capi] falha de rede ao enviar "${input.eventName}" (${input.eventId}): ${reason}`);
+    console.error(
+      `[meta-capi] falha de rede ao enviar evento: ${reason}`,
+      JSON.stringify(logContext(input)),
+    );
     return { ok: false, error: reason };
   } finally {
     clearTimeout(timeout);

@@ -3,14 +3,12 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Button } from "@/components/ui/button";
 import {
+  CONSENT_CHANGED_EVENT,
   CONSENT_COOKIE,
   CONSENT_DENIED,
   CONSENT_GRANTED,
   CONSENT_MAX_AGE_SECONDS,
 } from "@/lib/consent-constants";
-
-/** Disparado sempre que a escolha muda — o Pixel (`src/lib/meta/pixel.tsx`) ouve isto para ligar/desligar sem recarregar a página. */
-export const CONSENT_CHANGED_EVENT = "aqui:consent-changed";
 
 function readConsentCookie(): string | null {
   if (typeof document === "undefined") return null;

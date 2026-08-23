@@ -9,23 +9,29 @@ export const runtime = "nodejs";
 /**
  * Endpoint interno chamado pelo browser logo a seguir a disparar o Pixel,
  * para enviar o mesmo evento também via Conversions API (redundância contra
- * bloqueadores de anúncios / Safari ITP) — usado só para `ViewContent` e
- * `InitiateCheckout`, os únicos eventos que partem diretamente de uma ação
- * do visitante sem já existir uma Order/pagamento confirmado.
+ * bloqueadores de anúncios / Safari ITP) — usado para `PageView`,
+ * `ViewContent` e `InitiateCheckout`, os únicos eventos que partem
+ * diretamente de uma ação do visitante sem já existir uma Order/pagamento
+ * confirmado.
  *
  * Nunca confia em IP/user-agent/fbp/fbc vindos do corpo do pedido — lê-os
  * sempre desta própria request (única forma de garantir que correspondem a
  * quem realmente fez o pedido).
  */
 const bodySchema = z.object({
-  event: z.enum(["ViewContent", "InitiateCheckout"]),
+  event: z.enum(["PageView", "ViewContent", "InitiateCheckout"]),
   eventId: z.string().min(1).max(200),
   eventSourceUrl: z.string().url(),
 });
 
 export async function POST(request: Request) {
   if (!(await hasMarketingConsent())) {
-    return NextResponse.json({ skipped: "sem consentimento" }, { status: 204 });
+    // Nunca `NextResponse.json(body, { status: 204 })`: a spec HTTP proíbe
+    // corpo em respostas 204 — o `Response` do runtime (Node/Edge) lança
+    // `TypeError: Invalid response status code 204` se tentarmos, o que
+    // rebentava este endpoint (500) sempre que não havia consentimento,
+    // silenciosamente (o `fetch`/`sendBeacon` do cliente nunca reporta isto).
+    return new NextResponse(null, { status: 204 });
   }
 
   const parsed = bodySchema.safeParse(await request.json().catch(() => null));
@@ -43,6 +49,7 @@ export async function POST(request: Request) {
     eventId,
     eventSourceUrl,
     actionSource: "website",
+    origin: "pixel-relay",
     userData: {
       fbp,
       fbc,
