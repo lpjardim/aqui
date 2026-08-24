@@ -7,10 +7,27 @@ import {
   parseAttribution,
   serializeAttribution,
 } from "@/lib/attribution-constants";
+import {
+  LANDING_ROUTES,
+  LANDING_SESSION_COOKIE,
+  parseLandingSession,
+  serializeLandingSession,
+} from "@/lib/landing-experiment-constants";
 
-function makeRequest(url: string, cookieHeader?: string): NextRequest {
+const DEFAULT_BROWSER_USER_AGENT =
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15";
+
+function makeRequest(
+  url: string,
+  cookieHeader?: string,
+  extraHeaders?: Record<string, string>,
+): NextRequest {
   return new NextRequest(new URL(url, "https://aqui.example"), {
-    headers: cookieHeader ? { cookie: cookieHeader } : undefined,
+    headers: {
+      "user-agent": DEFAULT_BROWSER_USER_AGENT,
+      ...(cookieHeader ? { cookie: cookieHeader } : {}),
+      ...extraHeaders,
+    },
   });
 }
 
@@ -201,5 +218,122 @@ describe("middleware — last paid touch (aqui_last_paid_attribution)", () => {
     expect(cookie?.httpOnly).toBe(true);
     expect(cookie?.sameSite).toBe("lax");
     expect(cookie?.maxAge).toBe(60 * 60 * 24 * 90);
+  });
+});
+
+describe("middleware — /go (experimento landing_page_v1)", () => {
+  it("redireciona sempre para uma das 3 rotas conhecidas, nunca renderiza /go em si", () => {
+    const response = middleware(makeRequest("/go"));
+    expect(response.status).toBe(307);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(Object.values(LANDING_ROUTES)).toContain(location.pathname);
+  });
+
+  it("nunca cacheia a resposta do redirect (Cache-Control: no-store)", () => {
+    const response = middleware(makeRequest("/go"));
+    expect(response.headers.get("Cache-Control")).toBe("no-store, private");
+  });
+
+  it("escreve a cookie landing_session sem maxAge/expires (cookie de sessão, nunca sticky)", () => {
+    const response = middleware(makeRequest("/go"));
+    const cookie = response.cookies.get(LANDING_SESSION_COOKIE);
+    expect(cookie).toBeDefined();
+    expect(cookie?.maxAge).toBeUndefined();
+    expect(cookie?.expires).toBeUndefined();
+    expect(cookie?.httpOnly).toBe(true);
+    expect(cookie?.sameSite).toBe("lax");
+  });
+
+  it("distribui aproximadamente 33/33/34% entre as 3 variantes ao longo de muitos pedidos", () => {
+    const counts: Record<string, number> = { NORMAL: 0, SALES: 0, BLOG: 0 };
+    const ITERATIONS = 3000;
+
+    for (let i = 0; i < ITERATIONS; i++) {
+      const response = middleware(makeRequest("/go"));
+      const session = parseLandingSession(response.cookies.get(LANDING_SESSION_COOKIE)?.value);
+      expect(session).not.toBeNull();
+      counts[session!.variant] += 1;
+    }
+
+    for (const variant of Object.keys(counts)) {
+      const share = counts[variant] / ITERATIONS;
+      expect(share).toBeGreaterThan(0.28);
+      expect(share).toBeLessThan(0.38);
+    }
+  });
+
+  it("mantém a mesma variante em pedidos repetidos dentro da mesma sessão, mas gera um novo experiment_visit_id", () => {
+    const first = middleware(makeRequest("/go"));
+    const firstSession = parseLandingSession(first.cookies.get(LANDING_SESSION_COOKIE)?.value)!;
+
+    const second = middleware(
+      makeRequest("/go", `${LANDING_SESSION_COOKIE}=${serializeLandingSession(firstSession)}`),
+    );
+    const secondSession = parseLandingSession(second.cookies.get(LANDING_SESSION_COOKIE)?.value)!;
+
+    expect(secondSession.variant).toBe(firstSession.variant);
+    expect(secondSession.visitId).not.toBe(firstSession.visitId);
+  });
+
+  it("?variant= força a variante pedida e marca isDebug=true, sem contaminar o sorteio real", () => {
+    const response = middleware(makeRequest("/go?variant=sales"));
+    const session = parseLandingSession(response.cookies.get(LANDING_SESSION_COOKIE)?.value);
+
+    expect(session?.variant).toBe("SALES");
+    expect(session?.isDebug).toBe(true);
+    const location = new URL(response.headers.get("location") ?? "");
+    expect(location.pathname).toBe(LANDING_ROUTES.SALES);
+  });
+
+  it("preserva todos os UTMs/fbclid da URL original no redirect (exceto o próprio ?variant=)", () => {
+    const response = middleware(
+      makeRequest(
+        "/go?variant=blog&utm_source=ig&utm_medium=paid_social&utm_campaign=CampanhaA&fbclid=abc123",
+      ),
+    );
+    const location = new URL(response.headers.get("location") ?? "");
+
+    expect(location.pathname).toBe(LANDING_ROUTES.BLOG);
+    expect(location.searchParams.get("utm_source")).toBe("ig");
+    expect(location.searchParams.get("utm_medium")).toBe("paid_social");
+    expect(location.searchParams.get("utm_campaign")).toBe("CampanhaA");
+    expect(location.searchParams.get("fbclid")).toBe("abc123");
+    expect(location.searchParams.has("variant")).toBe(false);
+  });
+
+  it("guarda a atribuição desta entrada na própria cookie landing_session", () => {
+    const response = middleware(
+      makeRequest("/go?variant=normal&utm_source=ig&utm_campaign=CampanhaA&fbclid=abc123"),
+    );
+    const session = parseLandingSession(response.cookies.get(LANDING_SESSION_COOKIE)?.value);
+
+    expect(session?.attribution.utmSource).toBe("ig");
+    expect(session?.attribution.utmCampaign).toBe("CampanhaA");
+    expect(session?.fbclid).toBe("abc123");
+  });
+
+  it("bots/crawlers conhecidos são redirecionados sem receber cookie de sessão nenhuma", () => {
+    const response = middleware(
+      makeRequest("/go?utm_source=ig", undefined, { "user-agent": "facebookexternalhit/1.1" }),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.cookies.get(LANDING_SESSION_COOKIE)).toBeUndefined();
+  });
+
+  it("um user-agent normal (browser) nunca é tratado como bot", () => {
+    const response = middleware(
+      makeRequest("/go", undefined, {
+        "user-agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+      }),
+    );
+
+    expect(response.cookies.get(LANDING_SESSION_COOKIE)).toBeDefined();
+  });
+
+  it("uma rota normal (fora de /go) nunca escreve a cookie landing_session", () => {
+    const response = middleware(makeRequest("/"));
+    expect(response.cookies.get(LANDING_SESSION_COOKIE)).toBeUndefined();
   });
 });

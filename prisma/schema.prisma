@@ -58,6 +58,28 @@ enum HeroEventType {
   STRIPE_SESSION_CREATED
 }
 
+// Experimento A/B/C das 3 landing pages de entrada de campanhas
+// (`landing_page_v1`, ver `/go` em `middleware.ts`) — completamente
+// independente dos testes de Preços/Hero acima (cookie, tabela de eventos e
+// enums próprios). Ao contrário daqueles, a atribuição é por SESSÃO (cookie
+// sem `Max-Age`, nunca sticky para sempre) em vez de por 30 dias — ver
+// `src/lib/landing-experiment-constants.ts`.
+enum LandingVariant {
+  NORMAL
+  SALES
+  BLOG
+}
+
+enum LandingEventType {
+  EXPOSURE
+  PRICING_VIEW
+  CTA_CLICKED
+  PLAN_SELECTED
+  CHECKOUT_STARTED
+  PAYMENT_CLICKED
+  STRIPE_SESSION_CREATED
+}
+
 // Estado técnico da própria Stripe Checkout Session — nunca confundir com
 // `Order.status` (que é o estado de negócio da encomenda). Uma sessão
 // EXPIRED não muda o status da encomenda: a Order continua PENDING_PAYMENT
@@ -134,6 +156,25 @@ model Order {
   // — os dois testes correm em simultâneo mas nunca se misturam.
   heroVariant         HeroVariant?
   heroExperimentDebug Boolean      @default(false)
+
+  // Experimento A/B/C das landing pages (`landing_page_v1`) — variante da
+  // SESSÃO em que esta encomenda foi criada (lida da cookie `landing_session`,
+  // nunca do body do pedido). `null` cobre encomendas fora do experimento
+  // (não vieram de `/go`, ou vieram antes desta feature existir). Representa
+  // apenas a conversão "direta/de sessão" (ver `src/lib/landing-attribution.ts`
+  // para first/last/any-touch, que olham para o histórico completo do
+  // `visitorId`, não só para esta sessão).
+  landingVariant           LandingVariant?
+  landingExperimentDebug   Boolean         @default(false)
+  landingSessionId         String?
+  landingExperimentVisitId String?
+
+  // Visitante anónimo (cookie `aqui_vid`) — snapshot no momento da encomenda.
+  // Campo genérico (não é só do experimento de landing): é o que permite
+  // reconstruir first-touch/last-touch/assisted ao ligar esta Order ao
+  // histórico de `LandingExperimentEvent` do mesmo visitante, mesmo que a
+  // exposição relevante tenha acontecido numa sessão/dia diferente.
+  visitorId String?
 
   // Meta Pixel + Conversions API — capturados em `/api/pedido` (único
   // momento em que temos o pedido real do browser do cliente; o webhook da
@@ -214,6 +255,8 @@ model Order {
   @@index([metaAdId])
   @@index([pricingVariant])
   @@index([heroVariant])
+  @@index([landingVariant])
+  @@index([visitorId])
 }
 
 /**
@@ -331,6 +374,32 @@ model HeroExperimentEvent {
 
   @@index([variant, eventType])
   @@index([visitorId])
+}
+
+/**
+ * Eventos do funil do experimento A/B/C das landing pages (`landing_page_v1`)
+ * — tabela própria (nunca partilhada com `ExperimentEvent`/`HeroExperimentEvent`)
+ * para que os três testes corram ao mesmo tempo sem se misturarem. Duas
+ * diferenças face aos outros: `sessionId` e `experimentVisitId`, necessários
+ * para reconstruir jornadas entre sessões (ver `src/lib/landing-attribution.ts`)
+ * — os testes de Preços/Hero são sticky 30 dias e não precisam disto.
+ * `visitorId` continua a vir sempre da cookie `aqui_vid` (partilhada por
+ * todos os experimentos, só identifica o visitante).
+ */
+model LandingExperimentEvent {
+  id                String           @id @default(cuid())
+  visitorId         String
+  sessionId         String
+  experimentVisitId String
+  variant           LandingVariant
+  eventType         LandingEventType
+  metadata          Json?
+  isDebug           Boolean          @default(false)
+  createdAt         DateTime         @default(now())
+
+  @@index([variant, eventType])
+  @@index([visitorId])
+  @@index([experimentVisitId])
 }
 
 model LoginToken {

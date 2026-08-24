@@ -54,6 +54,18 @@ vi.mock("@/lib/hero-experiment", () => ({
   recordHeroExperimentEvent: vi.fn(async () => {}),
 }));
 
+vi.mock("@/lib/landing-experiment", () => ({
+  getLandingContext: vi.fn(async () => ({
+    variant: null,
+    visitorId: "vid_1",
+    sessionId: "sid_1",
+    experimentVisitId: null,
+    isDebug: false,
+    session: null,
+  })),
+  recordLandingExperimentEvent: vi.fn(async () => {}),
+}));
+
 vi.mock("@/lib/consent", () => ({
   hasMarketingConsent: vi.fn(async () => false),
 }));

@@ -5,6 +5,7 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackLandingExperimentEvent } from "@/lib/landing-experiment-tracking";
 import type { BillingFrequency } from "@/lib/pricing";
 
 /**
@@ -24,6 +25,7 @@ export function PrecosToggle() {
   useEffect(() => {
     // Só no mount — a mudança de toggle é reportada separadamente abaixo.
     trackExperimentEvent("pricing_exposed", { layout: "toggle", frequency: "MONTHLY" });
+    trackLandingExperimentEvent("pricing_view", { landingPath: "/", layout: "toggle" });
   }, []);
 
   function selectFrequency(next: BillingFrequency) {
@@ -117,14 +119,19 @@ export function PrecosToggle() {
                 variant={pack.featured ? "primary" : "outline"}
                 size="lg"
                 className="mt-6 w-full"
-                onClick={() =>
+                onClick={() => {
                   trackExperimentEvent("pricing_cta_clicked", {
                     packId: pack.id,
                     volume: pack.visualizations,
                     frequency,
                     layout: "toggle",
-                  })
-                }
+                  });
+                  trackLandingExperimentEvent("plan_selected", {
+                    plan: pack.id,
+                    billingType: frequency,
+                    price: isMonthly ? pack.monthlyPrice : pack.price,
+                  });
+                }}
               >
                 Escolher
               </ButtonLink>

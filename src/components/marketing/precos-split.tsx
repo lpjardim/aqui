@@ -5,6 +5,7 @@ import { PACKS } from "@/lib/packs";
 import { formatNumber, formatPrice } from "@/lib/format";
 import { ButtonLink } from "@/components/ui/button";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
+import { trackLandingExperimentEvent } from "@/lib/landing-experiment-tracking";
 
 /**
  * Variante A do A/B test de preços — design "split": cada card mostra as
@@ -19,6 +20,7 @@ import { trackExperimentEvent } from "@/lib/experiment-tracking";
 export function PrecosSplit() {
   useEffect(() => {
     trackExperimentEvent("pricing_exposed", { layout: "split" });
+    trackLandingExperimentEvent("pricing_view", { landingPath: "/", layout: "split" });
   }, []);
 
   return (
@@ -90,13 +92,20 @@ export function PrecosSplit() {
               variant={pack.featured ? "primary" : "outline"}
               size="lg"
               className="mt-6 w-full"
-              onClick={() =>
+              onClick={() => {
                 trackExperimentEvent("pricing_cta_clicked", {
                   packId: pack.id,
                   volume: pack.visualizations,
                   layout: "split",
-                })
-              }
+                });
+                trackLandingExperimentEvent("plan_selected", {
+                  plan: pack.id,
+                  // Layout "split" mostra as duas frequências lado a lado —
+                  // a frequência só é escolhida mais tarde no checkout.
+                  billingType: null,
+                  price: pack.price,
+                });
+              }}
             >
               Escolher
             </ButtonLink>

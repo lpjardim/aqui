@@ -27,6 +27,7 @@ import {
 import { track } from "@/lib/analytics";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
 import { trackHeroExperimentEvent } from "@/lib/hero-experiment-tracking";
+import { trackLandingExperimentEvent } from "@/lib/landing-experiment-tracking";
 import { useFireMetaEventOnConsent } from "@/lib/meta/use-fire-meta-event";
 import { AdPreviewMockups } from "@/components/pedido/ad-preview-mockups";
 
@@ -153,6 +154,13 @@ export function OrderForm({
     // Mesmo momento do funil, reportado também para o teste independente do
     // Hero (`hero_variant`) — ver `src/lib/hero-experiment-tracking.ts`.
     trackHeroExperimentEvent("hero_checkout_started", {
+      views: initialViews,
+      custom: initialCustom,
+      frequency: initialFrequency,
+    });
+    // Idem para o experimento `landing_page_v1` — no-op se esta sessão não
+    // veio de `/go` (ver `getLandingContext`).
+    trackLandingExperimentEvent("checkout_started", {
       views: initialViews,
       custom: initialCustom,
       frequency: initialFrequency,
@@ -340,6 +348,12 @@ export function OrderForm({
       packId: getPackByVisualizations(views)?.id ?? null,
     });
     trackHeroExperimentEvent("hero_payment_clicked", {
+      views,
+      billingFrequency: frequency,
+      price: totalPrice,
+      packId: getPackByVisualizations(views)?.id ?? null,
+    });
+    trackLandingExperimentEvent("payment_clicked", {
       views,
       billingFrequency: frequency,
       price: totalPrice,

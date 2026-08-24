@@ -1,5 +1,6 @@
 import { fireMetaPixelEvent } from "@/lib/meta/pixel";
 import { CONSENT_COOKIE, CONSENT_GRANTED } from "@/lib/consent-constants";
+import type { MetaCustomData } from "@/lib/meta/capi";
 
 export type ClientMetaEvent = "PageView" | "ViewContent" | "InitiateCheckout";
 
@@ -31,16 +32,16 @@ function debugLog(event: ClientMetaEvent, eventId: string, eventSourceUrl: strin
  * Pixel nem está carregado (`fireMetaPixelEvent` não faz nada) e o endpoint
  * devolve 204 sem enviar nada à Meta.
  */
-export function trackMetaEvent(event: ClientMetaEvent): void {
+export function trackMetaEvent(event: ClientMetaEvent, customData?: MetaCustomData): void {
   if (typeof window === "undefined") return;
 
   const eventId = crypto.randomUUID();
   const eventSourceUrl = window.location.href;
 
-  fireMetaPixelEvent(event, undefined, eventId);
+  fireMetaPixelEvent(event, customData, eventId);
   debugLog(event, eventId, eventSourceUrl);
 
-  const payload = JSON.stringify({ event, eventId, eventSourceUrl });
+  const payload = JSON.stringify({ event, eventId, eventSourceUrl, customData });
 
   try {
     if (typeof navigator.sendBeacon === "function") {

@@ -54,6 +54,15 @@ export type MetaUserData = {
 export type MetaCustomData = {
   value?: number;
   currency?: string;
+  /** Categoria genérica do conteúdo (ex.: "landing_experiment") — usada pelo
+   * experimento `landing_page_v1` para segmentar eventos no Events Manager
+   * sem inventar um evento standard novo. */
+  content_category?: string;
+  /** `experiment_id`/`experiment_variant` (ver `src/lib/landing-experiment-constants.ts`)
+   * — parâmetros extra, nunca usados para deduplicação (isso continua a ser
+   * feito exclusivamente pelo `event_id` partilhado Pixel/CAPI). */
+  experiment_id?: string;
+  experiment_variant?: string;
 };
 
 export type MetaCapiEventInput = {

@@ -7,6 +7,20 @@ import {
   isPaidTouch,
   serializeAttribution,
 } from "@/lib/attribution-constants";
+import {
+  LANDING_EXPERIMENT_PATH,
+  LANDING_ROUTES,
+  LANDING_SESSION_COOKIE,
+  SESSION_ID_COOKIE,
+  buildLandingAttributionSnapshot,
+  isLikelyBot,
+  parseForcedLandingVariant,
+  parseLandingSession,
+  randomLandingVariant,
+  serializeLandingSession,
+  type LandingSessionState,
+  type LandingVariantValue,
+} from "@/lib/landing-experiment-constants";
 
 /**
  * A/B test da secção de preços — atribuição 50/50 feita aqui (Edge, antes de
@@ -57,6 +71,25 @@ import {
  *   da última escrita. Uma visita direta/orgânica NUNCA a apaga nem a
  *   sobrescreve — só uma nova visita paga o faz. Complementa o first-touch
  *   para otimização de spend em Ads (ver `src/lib/attribution.ts`).
+ *
+ * Rota `/go` — experimento A/B/C das 3 landing pages (`landing_page_v1`, ver
+ * `src/lib/landing-experiment-constants.ts`). Todos os Meta Ads apontam para
+ * `aqui.network/go`; esta rota nunca renderiza nada — só decide a variante e
+ * redireciona (307, `Cache-Control: no-store` para nunca ser cacheada por
+ * CDN/browser, o que quebraria a randomização para todos os visitantes
+ * seguintes com o mesmo URL de campanha) preservando todos os query params
+ * (UTMs, `fbclid`, etc.).
+ * - `landing_session` — variante (normal/sales/blog) + `experiment_visit_id`
+ *   + snapshot da atribuição desta entrada, tudo num único JSON. AO
+ *   CONTRÁRIO de `pricing_variant`/`hero_variant`, esta cookie NUNCA leva
+ *   `Max-Age`/`Expires` — é uma cookie de sessão pura, morre quando o browser
+ *   fecha por completo. Isto é intencional: o pedido é explícito em nunca
+ *   prender um visitante para sempre à mesma variante (uma nova sessão faz
+ *   sempre um novo sorteio), mas sem trocar de variante a meio da mesma
+ *   sessão (refresh/back/navegação imediata). Só é atribuída em `/go`; as
+ *   próprias páginas de destino nunca reatribuem.
+ * - `aqui_sid` — `session_id` genérico (uuid), também sem `Max-Age` — mesma
+ *   ideia de `aqui_vid`, mas por sessão em vez de por visitante.
  */
 
 const PRICING_VARIANT_COOKIE = "pricing_variant";
@@ -76,8 +109,75 @@ function randomVariant(): "A" | "B" {
   return Math.random() < 0.5 ? "A" : "B";
 }
 
-export function middleware(request: NextRequest) {
+/**
+ * Constrói a resposta de redirect de `/go` — variante da sessão + novo
+ * `experiment_visit_id`, sempre preservando os query params originais
+ * (exceto `variant`, que é só o override de QA). Bots/crawlers óbvios nunca
+ * recebem cookie de sessão (logo nunca entram no experimento nem geram
+ * exposição), mas continuam a ser redirecionados normalmente para a home.
+ */
+function buildGoRedirect(request: NextRequest): NextResponse {
   const { searchParams } = request.nextUrl;
+  const forcedVariant = parseForcedLandingVariant(searchParams.get("variant"));
+  const bot = !forcedVariant && isLikelyBot(request.headers.get("user-agent"));
+
+  let variant: LandingVariantValue;
+  let isDebug: boolean;
+
+  if (!bot) {
+    if (forcedVariant) {
+      variant = forcedVariant;
+      isDebug = true;
+    } else {
+      const existing = parseLandingSession(request.cookies.get(LANDING_SESSION_COOKIE)?.value);
+      if (existing) {
+        variant = existing.variant;
+        isDebug = existing.isDebug;
+      } else {
+        variant = randomLandingVariant();
+        isDebug = false;
+      }
+    }
+  } else {
+    variant = "NORMAL";
+    isDebug = false;
+  }
+
+  const targetUrl = new URL(LANDING_ROUTES[variant], request.url);
+  searchParams.forEach((value, key) => {
+    if (key === "variant") return;
+    targetUrl.searchParams.set(key, value);
+  });
+
+  const response = NextResponse.redirect(targetUrl, 307);
+  // Nunca cacheável: o URL de campanha é sempre o mesmo para todos os
+  // visitantes — uma resposta cacheada por CDN/browser quebraria a
+  // randomização para todos os visitantes seguintes.
+  response.headers.set("Cache-Control", "no-store, private");
+
+  if (!bot) {
+    const { attribution, fbclid } = buildLandingAttributionSnapshot(searchParams);
+    const sessionState: LandingSessionState = {
+      variant,
+      visitId: crypto.randomUUID(),
+      isDebug,
+      attribution,
+      fbclid,
+    };
+    response.cookies.set(LANDING_SESSION_COOKIE, serializeLandingSession(sessionState), {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      // Sem `maxAge`/`expires` de propósito — cookie de sessão, nunca sticky.
+    });
+  }
+
+  return response;
+}
+
+export function middleware(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl;
   const forcedVariantParam = searchParams.get("a_variant");
   const forcedHeroVariantParam = searchParams.get("h_variant");
   const debugParam = searchParams.get("experiment_debug");
@@ -89,7 +189,19 @@ export function middleware(request: NextRequest) {
   const clearDebug = debugParam === "false";
   const wantsGenericDebug = debugParam === "true";
 
-  const response = NextResponse.next({ request });
+  const response =
+    pathname === LANDING_EXPERIMENT_PATH ? buildGoRedirect(request) : NextResponse.next({ request });
+
+  if (!request.cookies.get(SESSION_ID_COOKIE)) {
+    const sessionId = crypto.randomUUID();
+    request.cookies.set(SESSION_ID_COOKIE, sessionId);
+    response.cookies.set(SESSION_ID_COOKIE, sessionId, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      // Sem `maxAge` de propósito — cookie de sessão (ver doc no topo do ficheiro).
+    });
+  }
 
   // Debug nunca altera a atribuição real — só sobrepõe a variante *efetiva*
   // desta sessão de teste e marca-a para ser excluída dos KPIs. `a_variant`

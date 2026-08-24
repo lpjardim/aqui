@@ -22,6 +22,18 @@ const bodySchema = z.object({
   event: z.enum(["PageView", "ViewContent", "InitiateCheckout"]),
   eventId: z.string().min(1).max(200),
   eventSourceUrl: z.string().url(),
+  // Parâmetros extra opcionais (ex.: `experiment_variant` do experimento
+  // `landing_page_v1`) — nunca usados para deduplicação, só enriquecem
+  // `custom_data` no Events Manager.
+  customData: z
+    .object({
+      value: z.number().optional(),
+      currency: z.string().optional(),
+      content_category: z.string().optional(),
+      experiment_id: z.string().optional(),
+      experiment_variant: z.string().optional(),
+    })
+    .optional(),
 });
 
 export async function POST(request: Request) {
@@ -39,7 +51,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Dados inválidos." }, { status: 400 });
   }
 
-  const { event, eventId, eventSourceUrl } = parsed.data;
+  const { event, eventId, eventSourceUrl, customData } = parsed.data;
 
   const fbp = readCookie(request, "_fbp");
   const fbc = readCookie(request, "_fbc") ?? readCookie(request, "_fbc_pending");
@@ -56,6 +68,7 @@ export async function POST(request: Request) {
       clientIpAddress: clientIp(request),
       clientUserAgent: request.headers.get("user-agent"),
     },
+    customData,
   });
 
   return NextResponse.json({ ok: result.ok });

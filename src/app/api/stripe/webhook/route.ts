@@ -50,7 +50,14 @@ async function sendMetaPurchaseAndSubscribeOnce(
     clientIpAddress: order.metaClientIp,
     clientUserAgent: order.metaClientUserAgent,
   };
-  const customData = { value: amountCents / 100, currency: "EUR" };
+  // Enriquecimento do experimento `landing_page_v1` — dado já disponível no
+  // snapshot da Order (zero queries extra), nunca toca no `event_id`
+  // partilhado com o Pixel (dedup continua exatamente igual).
+  const customData = {
+    value: amountCents / 100,
+    currency: "EUR",
+    ...(order.landingVariant ? { experiment_variant: order.landingVariant } : {}),
+  };
 
   await sendMetaCapiEvent({
     eventName: "Purchase",
@@ -107,7 +114,11 @@ async function sendMetaRenewalPurchase(order: OrderWithUser, invoice: Stripe.Inv
       clientIpAddress: order.metaClientIp,
       clientUserAgent: order.metaClientUserAgent,
     },
-    customData: { value: invoice.amount_paid / 100, currency: "EUR" },
+    customData: {
+      value: invoice.amount_paid / 100,
+      currency: "EUR",
+      ...(order.landingVariant ? { experiment_variant: order.landingVariant } : {}),
+    },
   });
 }
 

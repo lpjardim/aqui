@@ -8,7 +8,8 @@ import { createLoginLink } from "@/lib/auth";
 import { sendLoginEmail } from "@/lib/email";
 import { getPricingContext, recordExperimentEvent } from "@/lib/experiments";
 import { getHeroContext, recordHeroExperimentEvent } from "@/lib/hero-experiment";
-import { ExperimentEventType, HeroEventType } from "@/generated/prisma/enums";
+import { getLandingContext, recordLandingExperimentEvent } from "@/lib/landing-experiment";
+import { ExperimentEventType, HeroEventType, LandingEventType } from "@/generated/prisma/enums";
 import { hasMarketingConsent } from "@/lib/consent";
 import { clientIp, readCookie } from "@/lib/meta/request-context";
 import { getPackByVisualizations } from "@/lib/packs";
@@ -121,6 +122,11 @@ export async function POST(request: Request) {
       isDebug: heroExperimentDebug,
     } = await getHeroContext();
 
+    // Experimento `landing_page_v1` — variante `null` quando esta sessão
+    // nunca passou por `/go` (visita direta/orgânica às páginas). Nunca do
+    // body do pedido, sempre da cookie `landing_session` (ver `getLandingContext`).
+    const landingContext = await getLandingContext();
+
     // Meta Pixel + Conversions API — capturados aqui porque este é o único
     // momento em que temos o pedido real do browser do cliente; o webhook da
     // Stripe (que confirma o pagamento) não tem acesso a nada disto — nem ao
@@ -174,6 +180,16 @@ export async function POST(request: Request) {
         pricingExperimentDebug,
         heroVariant,
         heroExperimentDebug,
+        // `visitorId` é o mesmo `aqui_vid` já lido para o teste de preços —
+        // campo genérico (não só do experimento de landing): é o que permite
+        // reconstruir first/last/any-touch em `src/lib/landing-attribution.ts`
+        // a partir do histórico completo de `LandingExperimentEvent`, mesmo
+        // quando a compra acontece numa sessão sem nenhuma variante ativa.
+        visitorId: pricingVisitorId,
+        landingVariant: landingContext.variant,
+        landingExperimentDebug: landingContext.isDebug,
+        landingSessionId: landingContext.sessionId,
+        landingExperimentVisitId: landingContext.experimentVisitId,
         metaPurchaseEventId,
         metaMarketingConsent,
         metaFbp,
@@ -318,6 +334,23 @@ export async function POST(request: Request) {
           },
         }).catch((error) => {
           console.error("[pedido] falha ao registar hero stripe_session_created:", error);
+        }),
+      );
+      // Mesmo evento para o experimento `landing_page_v1` — no-op silencioso
+      // se `landingContext.variant` for `null` (sessão fora de `/go`).
+      after(() =>
+        recordLandingExperimentEvent({
+          eventType: LandingEventType.STRIPE_SESSION_CREATED,
+          context: landingContext,
+          metadata: {
+            orderId: order.id,
+            packId: getPackByVisualizations(views)?.id ?? null,
+            billingFrequency: input.billingFrequency,
+            price,
+            landingVariant: landingContext.variant,
+          },
+        }).catch((error) => {
+          console.error("[pedido] falha ao registar landing stripe_session_created:", error);
         }),
       );
     }

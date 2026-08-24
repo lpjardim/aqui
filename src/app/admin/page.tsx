@@ -15,6 +15,15 @@ import { prisma } from "@/lib/prisma";
 import { getLastMetaSyncAt } from "@/lib/meta";
 import { getPricingExperimentReport, type VariantReport } from "@/lib/experiments";
 import { getHeroExperimentReport, type HeroVariantReport } from "@/lib/hero-experiment";
+import { getLandingExperimentReport, type LandingVariantReport } from "@/lib/landing-experiment";
+import {
+  hasEnoughSample,
+  type JourneyAggregate,
+  type LandingAttributionReport,
+  type VariantAttributionCounts,
+} from "@/lib/landing-attribution";
+import { getLandingAttributionReport, getLandingJourneyReport } from "@/lib/landing-attribution-report";
+import type { LandingVariant } from "@/generated/prisma/enums";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
 import { MetaAssociation } from "./meta-association";
@@ -42,7 +51,15 @@ export default async function AdminPage() {
     );
   }
 
-  const [orders, lastMetaSyncAt, pricingReport, heroReport] = await Promise.all([
+  const [
+    orders,
+    lastMetaSyncAt,
+    pricingReport,
+    heroReport,
+    landingReport,
+    landingAttributionReport,
+    landingJourneyReport,
+  ] = await Promise.all([
     prisma.order.findMany({
       orderBy: { createdAt: "desc" },
       include: {
@@ -57,6 +74,9 @@ export default async function AdminPage() {
     getLastMetaSyncAt(),
     getPricingExperimentReport(),
     getHeroExperimentReport(),
+    getLandingExperimentReport(),
+    getLandingAttributionReport(),
+    getLandingJourneyReport(),
   ]);
 
   return (
@@ -76,6 +96,12 @@ export default async function AdminPage() {
       <PricingExperimentSection report={pricingReport} />
 
       <HeroExperimentSection report={heroReport} />
+
+      <LandingExperimentSection report={landingReport} />
+
+      <LandingAttributionSection report={landingAttributionReport} />
+
+      <LandingJourneySection journeys={landingJourneyReport} />
 
       <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -561,6 +587,222 @@ function HeroExperimentSection({ report }: { report: HeroVariantReport[] }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+const LANDING_VARIANT_LABELS: Record<LandingVariant, string> = {
+  NORMAL: "Normal (/)",
+  SALES: "Sales (/anunciar)",
+  BLOG: "Blog",
+};
+
+/**
+ * Resultados do experimento A/B/C das landing pages (`landing_page_v1` — ver
+ * `src/lib/landing-experiment.ts`). Ao contrário dos testes acima, esta
+ * variante é atribuída por SESSÃO (não sticky 30 dias) através da rota
+ * `/go` — só entram aqui visitantes que vieram de uma campanha com esse
+ * link. Métricas principais: taxa de conversão (visitante → pagamento) e
+ * receita por visitante, para comparar páginas com estruturas e preços
+ * diferentes de forma justa.
+ */
+function LandingExperimentSection({ report }: { report: LandingVariantReport[] }) {
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">A/B/C Test — Landing Pages</h2>
+        <span className="rounded-full bg-red-strong/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-strong">
+          Experimento em curso
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        Tráfego de campanhas distribuído por `/go` entre a home, a página de vendas (`/anunciar`)
+        e o artigo do blog — atribuição por sessão (nunca sticky para sempre). Métricas
+        principais: conversão (visitante → pagamento) e receita por visitante.
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-3">
+        {report.map((variant) => (
+          <div key={variant.variant} className="rounded-md border border-line p-5">
+            <h3 className="text-[14px] font-bold">{LANDING_VARIANT_LABELS[variant.variant]}</h3>
+            <dl className="mt-3">
+              <StatRow label="Visitantes" value={formatNumber(variant.visitors)} />
+              <StatRow label="Sessões (visitas)" value={formatNumber(variant.sessions)} />
+              <StatRow label="Cliques CTA / preços vistos" value={formatNumber(variant.ctaClicks)} />
+              <StatRow label="Checkouts iniciados" value={formatNumber(variant.checkoutsStarted)} />
+              <StatRow label="Cliques em pagar" value={formatNumber(variant.paymentClicks)} />
+              <StatRow
+                label="Stripe sessions criadas"
+                value={formatNumber(variant.stripeSessionsCreated)}
+              />
+              <StatRow label="Encomendas criadas" value={formatNumber(variant.ordersCreated)} />
+              <StatRow label="Pagamentos concluídos" value={formatNumber(variant.paymentsCompleted)} />
+              <StatRow label="Visitante → clique CTA" value={formatRate(variant.ctaClickRate)} />
+              <StatRow
+                label="Visitante → checkout iniciado"
+                value={formatRate(variant.checkoutConversionRate)}
+              />
+              <StatRow
+                label="Conversão (visitante → pagamento)"
+                value={formatRate(variant.purchaseConversionRate)}
+                highlight
+              />
+              <StatRow label="Receita (sessão/direta)" value={formatPrice(variant.revenueCents)} />
+              <StatRow
+                label="Receita por visitante"
+                value={
+                  variant.revenuePerVisitorCents !== null
+                    ? formatPrice(Math.round(variant.revenuePerVisitorCents))
+                    : "—"
+                }
+                highlight
+              />
+              <StatRow
+                label="Receita por sessão"
+                value={
+                  variant.revenuePerSessionCents !== null
+                    ? formatPrice(Math.round(variant.revenuePerSessionCents))
+                    : "—"
+                }
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function landingAttributionRows(counts: VariantAttributionCounts[]): VariantAttributionCounts[] {
+  const order: LandingVariant[] = ["NORMAL", "SALES", "BLOG"];
+  return order.map(
+    (variant) => counts.find((count) => count.variant === variant) ?? { variant, purchases: 0, revenueCents: 0 },
+  );
+}
+
+/** Uma tabela compacta (variante · compras · receita) para um dos 4 modelos de attribution. */
+function AttributionModelTable({
+  title,
+  description,
+  counts,
+}: {
+  title: string;
+  description: string;
+  counts: VariantAttributionCounts[];
+}) {
+  return (
+    <div className="rounded-md border border-line p-5">
+      <h3 className="text-[14px] font-bold">{title}</h3>
+      <p className="mt-1 text-[12px] text-muted">{description}</p>
+      <dl className="mt-3">
+        {landingAttributionRows(counts).map((count) => (
+          <div
+            key={count.variant}
+            className="flex items-center justify-between border-b border-line/60 py-2 last:border-0"
+          >
+            <dt className="text-[13px] text-muted">{LANDING_VARIANT_LABELS[count.variant]}</dt>
+            <dd className="text-right text-[13px] font-semibold text-ink">
+              {hasEnoughSample(count.purchases) ? (
+                <>
+                  {formatNumber(count.purchases)} compras · {formatPrice(count.revenueCents)}
+                </>
+              ) : (
+                <span className="text-muted">
+                  {formatNumber(count.purchases)} compras · dados insuficientes
+                </span>
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * Attribution do experimento de landing ao longo de VÁRIAS sessões (ver
+ * `src/lib/landing-attribution.ts`) — capacidade nova face aos testes de
+ * Preços/Hero. Os 4 modelos são leituras diferentes do MESMO conjunto de
+ * compras pagas — nunca somar a receita entre eles. "Dados insuficientes"
+ * aparece sempre que uma variante tem menos de 30 compras nesse modelo, para
+ * não sugerir um vencedor sem volume suficiente.
+ */
+function LandingAttributionSection({ report }: { report: LandingAttributionReport }) {
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">Landing Pages — Attribution</h2>
+        <span className="text-[12px] text-muted">
+          {formatNumber(report.totalPaidOrders)} encomendas pagas com visitante identificado
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        4 leituras diferentes das MESMAS compras — nunca somar a receita entre elas. Direta/sessão
+        = variante da sessão em que a compra foi criada; first/last-touch = 1ª/última exposição
+        antes da compra (pode ter acontecido numa sessão anterior); assistida = qualquer variante
+        vista antes da compra (uma compra pode contar para mais do que uma).
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <AttributionModelTable
+          title="Direta / sessão"
+          description="Variante ativa no momento da compra."
+          counts={report.direct}
+        />
+        <AttributionModelTable
+          title="First-touch"
+          description="1ª exposição do visitante, mesmo que noutra sessão."
+          counts={report.firstTouch}
+        />
+        <AttributionModelTable
+          title="Last-touch"
+          description="Última exposição antes da compra."
+          counts={report.lastTouch}
+        />
+        <AttributionModelTable
+          title="Assistida (any-touch)"
+          description="Qualquer variante vista antes da compra."
+          counts={report.assisted}
+        />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Jornadas mais comuns até à compra (ex.: Blog → Sales) — versão simples,
+ * sem árvore de decisão nem estatística avançada (ver
+ * `computeLandingJourneyReport`). Útil para perceber o papel do blog em
+ * conversões assistidas mesmo quando não é a página onde a compra "nasce".
+ */
+function LandingJourneySection({ journeys }: { journeys: JourneyAggregate[] }) {
+  const topJourneys = journeys.slice(0, 10);
+
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <h2 className="text-[18px] font-black">Landing Pages — Jornadas mais comuns</h2>
+      <p className="mt-1.5 text-[13px] text-muted">
+        Sequência de variantes vistas antes de cada compra (repetições consecutivas colapsadas —
+        ex.: Blog, Blog, Sales conta como Blog → Sales).
+      </p>
+
+      {topJourneys.length === 0 ? (
+        <p className="mt-4 text-[13px] text-muted">Ainda não há compras suficientes para mostrar jornadas.</p>
+      ) : (
+        <dl className="mt-4">
+          {topJourneys.map((journey) => (
+            <div
+              key={journey.label}
+              className="flex items-center justify-between border-b border-line/60 py-2.5 last:border-0"
+            >
+              <dt className="text-[13px] font-semibold text-ink">{journey.label}</dt>
+              <dd className="text-right text-[13px] text-muted">
+                {formatNumber(journey.purchases)} compras · {formatPrice(journey.revenueCents)}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
     </section>
   );
 }
