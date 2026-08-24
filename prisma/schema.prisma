@@ -156,6 +156,43 @@ model Order {
   // renovações — independentemente de mais tarde vir a haver consentimento.
   metaMarketingConsent Boolean @default(false)
 
+  // Atribuição de marketing (de onde veio o cliente) — nunca confundir com os
+  // campos `meta*` acima, que são a campanha que a PRÓPRIA Aqui. cria/gere na
+  // Meta Ads para entregar as visualizações compradas. Estes aqui são o
+  // "snapshot" first-touch dos parâmetros vindos do anúncio que trouxe o
+  // visitante (UTMs + IDs de campanha/adset/anúncio Meta), capturados no
+  // `middleware.ts` (cookie `aqui_attribution`) e gravados aqui no momento em
+  // que a Order é criada — nunca lidos do body do pedido nem recalculados
+  // depois. Todos `null` em encomendas orgânicas/antigas ou sem atribuição.
+  utmSource             String?
+  utmMedium             String?
+  utmCampaign           String?
+  utmContent            String?
+  utmTerm               String?
+  placement             String?
+  attributionCampaignId String?
+  attributionAdsetId    String?
+  attributionAdId       String?
+
+  // Last paid touch — snapshot da ÚLTIMA visita com evidência clara de
+  // campanha paga antes da criação da Order (ver regra `isPaidTouch` em
+  // `src/lib/attribution-constants.ts`). Complementa, sem substituir, os 9
+  // campos first-touch acima: aqueles respondem "de onde veio o cliente pela
+  // primeira vez" (análise de aquisição), estes respondem "que campanha paga
+  // o convenceu a comprar desta vez" (otimização de spend em Ads). Uma
+  // visita direta/orgânica NUNCA apaga estes campos — só uma nova visita paga
+  // os substitui. Todos `null` em encomendas sem nenhum toque pago
+  // identificável (incluindo todas as Orders anteriores a esta feature).
+  lastPaidUtmSource     String?
+  lastPaidUtmMedium     String?
+  lastPaidUtmCampaign   String?
+  lastPaidUtmContent    String?
+  lastPaidUtmTerm       String?
+  lastPaidPlacement     String?
+  lastPaidCampaignId    String?
+  lastPaidAdsetId       String?
+  lastPaidAdId          String?
+
   // --- Histórico anterior aos DeliveryCycle — mantidos apenas para não
   // perder dados de encomendas antigas (criadas antes desta migration). O
   // código novo lê/escreve exclusivamente nos campos equivalentes do

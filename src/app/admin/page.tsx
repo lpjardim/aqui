@@ -97,6 +97,7 @@ export default async function AdminPage() {
           const deliveredViews = cycle?.deliveredViews ?? order.visualizationsDelivered;
           const targetViews = cycle?.targetViews ?? order.visualizationsPurchased;
           const isMonthly = order.billingFrequency === "MONTHLY";
+          const attributionLabel = compactAttributionLabel(order);
 
           return (
           <article
@@ -129,6 +130,9 @@ export default async function AdminPage() {
                     {order.cancelAtPeriodEnd && " · cancela no fim do período"}
                     {cycle && ` · próxima renovação: ${formatDate(cycle.endsAt)}`}
                   </p>
+                )}
+                {attributionLabel && (
+                  <p className="mt-1 text-[13px] text-muted">Atribuição: {attributionLabel}</p>
                 )}
               </div>
               <div className="text-right">
@@ -270,6 +274,11 @@ export default async function AdminPage() {
                 </div>
               )}
             </div>
+
+            <div className="mt-5 border-t border-line pt-5">
+              <h3 className="text-[13px] font-bold uppercase tracking-[0.1em] text-muted">Atribuição</h3>
+              <AttributionDetails order={order} />
+            </div>
           </article>
           );
         })}
@@ -296,6 +305,110 @@ function StatRow({ label, value, highlight = false }: { label: string; value: st
       <dt className="text-[13px] text-muted">{label}</dt>
       <dd className={`text-[13px] font-semibold ${highlight ? "text-red-strong" : "text-ink"}`}>{value}</dd>
     </div>
+  );
+}
+
+type OrderAttribution = {
+  utmSource: string | null;
+  utmMedium: string | null;
+  utmCampaign: string | null;
+  utmContent: string | null;
+  utmTerm: string | null;
+  placement: string | null;
+  attributionCampaignId: string | null;
+  attributionAdsetId: string | null;
+  attributionAdId: string | null;
+  lastPaidUtmSource: string | null;
+  lastPaidUtmMedium: string | null;
+  lastPaidUtmCampaign: string | null;
+  lastPaidUtmContent: string | null;
+  lastPaidUtmTerm: string | null;
+  lastPaidPlacement: string | null;
+  lastPaidCampaignId: string | null;
+  lastPaidAdsetId: string | null;
+  lastPaidAdId: string | null;
+};
+
+/**
+ * Linha compacta do cabeçalho da Order — prioriza LAST PAID TOUCH (mais útil
+ * para decisão de spend em Ads); cai para first-touch quando a Order nunca
+ * teve nenhum toque pago identificável (ex.: entrada 100% orgânica). Devolve
+ * `null` quando não há nenhuma das duas.
+ */
+function compactAttributionLabel(order: OrderAttribution): string | null {
+  const source = order.lastPaidUtmSource ?? order.utmSource;
+  const campaign = order.lastPaidUtmCampaign ?? order.utmCampaign;
+  const label = [source, campaign].filter(Boolean).join(" · ");
+  return label || null;
+}
+
+/**
+ * Atribuição de marketing (de onde veio o cliente), dividida em duas
+ * origens independentes — snapshots capturados no `middleware.ts`/
+ * `src/lib/attribution.ts` no momento em que a Order foi criada:
+ * - PRIMEIRA ORIGEM: first-touch, nunca muda depois da primeira visita.
+ * - ÚLTIMA ORIGEM PAGA: last paid touch, última campanha PAGA (ver
+ *   `isPaidTouch`) antes desta compra — `null` se nunca houve nenhuma.
+ * `utm_campaign` → Campanha, `utm_term` → Adset, `utm_content` → Anúncio
+ * (mapeamento pedido, corresponde à forma como os anúncios da Meta
+ * preenchem estes UTMs).
+ */
+function AttributionDetails({ order }: { order: OrderAttribution }) {
+  return (
+    <div className="mt-3 grid gap-5 sm:grid-cols-2">
+      <div>
+        <h4 className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted">
+          Primeira origem
+        </h4>
+        <AttributionRows
+          rows={[
+            ["Fonte", order.utmSource],
+            ["Meio", order.utmMedium],
+            ["Campanha", order.utmCampaign],
+            ["Adset", order.utmTerm],
+            ["Anúncio", order.utmContent],
+            ["Placement", order.placement],
+            ["Campaign ID", order.attributionCampaignId],
+            ["Adset ID", order.attributionAdsetId],
+            ["Ad ID", order.attributionAdId],
+          ]}
+        />
+      </div>
+      <div>
+        <h4 className="text-[11px] font-bold uppercase tracking-[0.08em] text-muted">
+          Última origem paga
+        </h4>
+        <AttributionRows
+          rows={[
+            ["Fonte", order.lastPaidUtmSource],
+            ["Meio", order.lastPaidUtmMedium],
+            ["Campanha", order.lastPaidUtmCampaign],
+            ["Adset", order.lastPaidUtmTerm],
+            ["Anúncio", order.lastPaidUtmContent],
+            ["Placement", order.lastPaidPlacement],
+            ["Campaign ID", order.lastPaidCampaignId],
+            ["Adset ID", order.lastPaidAdsetId],
+            ["Ad ID", order.lastPaidAdId],
+          ]}
+        />
+      </div>
+    </div>
+  );
+}
+
+function AttributionRows({ rows }: { rows: [string, string | null][] }) {
+  const visibleRows = rows.filter(([, value]) => value);
+
+  if (visibleRows.length === 0) {
+    return <p className="mt-2 text-[13px] text-muted">Origem não identificada.</p>;
+  }
+
+  return (
+    <dl className="mt-2">
+      {visibleRows.map(([label, value]) => (
+        <StatRow key={label} label={label} value={value as string} />
+      ))}
+    </dl>
   );
 }
 

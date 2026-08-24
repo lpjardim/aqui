@@ -12,6 +12,11 @@ import { ExperimentEventType, HeroEventType } from "@/generated/prisma/enums";
 import { hasMarketingConsent } from "@/lib/consent";
 import { clientIp, readCookie } from "@/lib/meta/request-context";
 import { getPackByVisualizations } from "@/lib/packs";
+import {
+  getLastPaidTouchAttribution,
+  getStoredAttribution,
+  toLastPaidTouchOrderFields,
+} from "@/lib/attribution";
 
 export const runtime = "nodejs";
 
@@ -20,6 +25,65 @@ function oneMonthFromNow(from: Date): Date {
   const next = new Date(from);
   next.setMonth(next.getMonth() + 1);
   return next;
+}
+
+// Limite da própria Stripe: 500 caracteres por valor de metadata. Truncar
+// defensivamente em vez de deixar a chamada à Stripe falhar.
+const STRIPE_METADATA_VALUE_MAX_LENGTH = 500;
+
+/**
+ * Só os campos de atribuição mais úteis para reconciliar na própria Stripe
+ * (não é fonte de verdade — a Order na nossa BD continua a ser). Nunca inclui
+ * chaves com valor vazio/nulo (a Stripe aceita, mas não há razão para poluir
+ * o dashboard com "utm_source: null").
+ */
+function stripeAttributionMetadata(attribution: {
+  attributionCampaignId: string | null;
+  attributionAdsetId: string | null;
+  attributionAdId: string | null;
+  utmSource: string | null;
+  utmCampaign: string | null;
+}): Record<string, string> {
+  const entries: [string, string | null][] = [
+    ["meta_campaign_id", attribution.attributionCampaignId],
+    ["meta_adset_id", attribution.attributionAdsetId],
+    ["meta_ad_id", attribution.attributionAdId],
+    ["utm_source", attribution.utmSource],
+    ["utm_campaign", attribution.utmCampaign],
+  ];
+
+  return Object.fromEntries(
+    entries
+      .filter((entry): entry is [string, string] => Boolean(entry[1]))
+      .map(([key, value]) => [key, value.slice(0, STRIPE_METADATA_VALUE_MAX_LENGTH)]),
+  );
+}
+
+/**
+ * Mesma ideia de `stripeAttributionMetadata`, mas para o last-paid-touch —
+ * só os IDs técnicos + utm_source/utm_campaign, prefixados com `last_paid_`
+ * para nunca colidir com as chaves do first-touch na mesma metadata.
+ */
+function stripeLastPaidAttributionMetadata(attribution: {
+  attributionCampaignId: string | null;
+  attributionAdsetId: string | null;
+  attributionAdId: string | null;
+  utmSource: string | null;
+  utmCampaign: string | null;
+}): Record<string, string> {
+  const entries: [string, string | null][] = [
+    ["last_paid_campaign_id", attribution.attributionCampaignId],
+    ["last_paid_adset_id", attribution.attributionAdsetId],
+    ["last_paid_ad_id", attribution.attributionAdId],
+    ["last_paid_utm_source", attribution.utmSource],
+    ["last_paid_utm_campaign", attribution.utmCampaign],
+  ];
+
+  return Object.fromEntries(
+    entries
+      .filter((entry): entry is [string, string] => Boolean(entry[1]))
+      .map(([key, value]) => [key, value.slice(0, STRIPE_METADATA_VALUE_MAX_LENGTH)]),
+  );
 }
 
 export async function POST(request: Request) {
@@ -74,6 +138,16 @@ export async function POST(request: Request) {
     const metaClientUserAgent = metaMarketingConsent ? request.headers.get("user-agent") : null;
     const metaClientIp = metaMarketingConsent ? clientIp(request) : null;
 
+    // Atribuição de marketing (UTMs + IDs de campanha/adset/anúncio) — lida
+    // sempre das cookies já capturadas pelo `middleware.ts`, nunca do body do
+    // pedido. Independente de consentimento de marketing: não são
+    // identificadores de terceiros, só rótulos de campanha (ver
+    // `src/lib/attribution-constants.ts`). Dois snapshots independentes e
+    // imutáveis a partir daqui: first-touch (nunca muda) e last-paid-touch
+    // (última campanha paga antes desta compra).
+    const attribution = await getStoredAttribution();
+    const lastPaidTouch = await getLastPaidTouchAttribution();
+
     const user = await prisma.user.upsert({
       where: { email },
       create: {
@@ -106,6 +180,8 @@ export async function POST(request: Request) {
         metaFbc,
         metaClientUserAgent,
         metaClientIp,
+        ...attribution,
+        ...toLastPaidTouchOrderFields(lastPaidTouch),
         assets: {
           create: input.assets.map((asset) => ({
             fileUrl: asset.url,
@@ -142,6 +218,10 @@ export async function POST(request: Request) {
     const stripe = getStripe();
     const lineName = checkoutLineName(views, input.zone);
     const description = `Campanha para ${input.companyName}`;
+    const attributionMetadata = {
+      ...stripeAttributionMetadata(attribution),
+      ...stripeLastPaidAttributionMetadata(lastPaidTouch),
+    };
 
     // `payment_method_types` fica de propósito por definir: isto ativa
     // "dynamic payment methods" da Stripe, que decide os métodos elegíveis
@@ -157,8 +237,8 @@ export async function POST(request: Request) {
             mode: "payment",
             customer_email: email,
             client_reference_id: order.id,
-            metadata: { orderId: order.id },
-            payment_intent_data: { metadata: { orderId: order.id } },
+            metadata: { orderId: order.id, ...attributionMetadata },
+            payment_intent_data: { metadata: { orderId: order.id, ...attributionMetadata } },
             line_items: [
               {
                 quantity: 1,
@@ -176,11 +256,11 @@ export async function POST(request: Request) {
             mode: "subscription",
             customer_email: email,
             client_reference_id: order.id,
-            metadata: { orderId: order.id },
+            metadata: { orderId: order.id, ...attributionMetadata },
             // `metadata.orderId` na própria Subscription garante que o
             // webhook `invoice.paid` consegue sempre resolver a Order, mesmo
             // que chegue antes de `checkout.session.completed`.
-            subscription_data: { metadata: { orderId: order.id } },
+            subscription_data: { metadata: { orderId: order.id, ...attributionMetadata } },
             line_items: [
               {
                 quantity: 1,

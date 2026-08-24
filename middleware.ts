@@ -1,4 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
+import {
+  ATTRIBUTION_COOKIE,
+  ATTRIBUTION_MAX_AGE_SECONDS,
+  LAST_PAID_ATTRIBUTION_COOKIE,
+  extractAttributionFromSearchParams,
+  isPaidTouch,
+  serializeAttribution,
+} from "@/lib/attribution-constants";
 
 /**
  * A/B test da secção de preços — atribuição 50/50 feita aqui (Edge, antes de
@@ -34,6 +42,21 @@ import { NextResponse, type NextRequest } from "next/server";
  *   Pixel da Meta, e só depois de consentimento) — é só um valor técnico de
  *   reserva, lido como fallback pelos endpoints que enviam eventos para a
  *   Meta (ver `src/app/api/meta/track/route.ts`).
+ * - `aqui_attribution` — atribuição de marketing FIRST-TOUCH (UTMs + IDs de
+ *   campanha/adset/anúncio do anúncio que trouxe o visitante — ver
+ *   `src/lib/attribution-constants.ts`). First-touch puro, 90 dias: só é
+ *   escrita se a URL trouxer pelo menos um destes parâmetros E a cookie
+ *   ainda não existir — nunca sobrescrita por navegação interna nem por uma
+ *   nova entrada externa dentro da mesma janela de 90 dias. Independente de
+ *   consentimento de marketing (não é um identificador de terceiros, só
+ *   rótulos de campanha — ver README).
+ * - `aqui_last_paid_attribution` — atribuição de marketing LAST PAID TOUCH,
+ *   mesmos 9 campos da cookie acima, mas com semântica oposta: é
+ *   REESCRITA sempre que a URL trouxer evidência de campanha paga (ver
+ *   `isPaidTouch` em `src/lib/attribution-constants.ts`), 90 dias a partir
+ *   da última escrita. Uma visita direta/orgânica NUNCA a apaga nem a
+ *   sobrescreve — só uma nova visita paga o faz. Complementa o first-touch
+ *   para otimização de spend em Ads (ver `src/lib/attribution.ts`).
  */
 
 const PRICING_VARIANT_COOKIE = "pricing_variant";
@@ -145,6 +168,37 @@ export function middleware(request: NextRequest) {
       path: "/",
       httpOnly: true,
       sameSite: "lax",
+    });
+  }
+
+  // Extraído uma única vez e partilhado pelas duas cookies de atribuição
+  // abaixo — mesmos 9 campos, duas semânticas de escrita diferentes.
+  const attribution = extractAttributionFromSearchParams(searchParams);
+
+  // First-touch: só grava se houver pelo menos um parâmetro de atribuição
+  // nesta URL E ainda não existir cookie — nunca sobrescreve navegação
+  // interna nem uma nova entrada externa dentro da mesma janela de 90 dias.
+  // COMPORTAMENTO INALTERADO por causa do last-paid-touch abaixo.
+  if (!request.cookies.get(ATTRIBUTION_COOKIE) && attribution) {
+    response.cookies.set(ATTRIBUTION_COOKIE, serializeAttribution(attribution), {
+      maxAge: ATTRIBUTION_MAX_AGE_SECONDS,
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+    });
+  }
+
+  // Last paid touch: ao contrário do first-touch, é sempre reescrita quando
+  // há evidência de campanha paga — mesmo que já exista uma cookie anterior.
+  // Uma visita direta/orgânica (sem evidência de "pago") não entra aqui, por
+  // isso nunca apaga nem sobrescreve o último toque pago conhecido.
+  if (attribution && isPaidTouch(searchParams)) {
+    response.cookies.set(LAST_PAID_ATTRIBUTION_COOKIE, serializeAttribution(attribution), {
+      maxAge: ATTRIBUTION_MAX_AGE_SECONDS,
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
     });
   }
 
