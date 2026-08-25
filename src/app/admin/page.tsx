@@ -16,14 +16,26 @@ import { getLastMetaSyncAt } from "@/lib/meta";
 import { getPricingExperimentReport, type VariantReport } from "@/lib/experiments";
 import { getHeroExperimentReport, type HeroVariantReport } from "@/lib/hero-experiment";
 import { getLandingExperimentReport, type LandingVariantReport } from "@/lib/landing-experiment";
+import { getAcquisitionRouterFamilyReport, type FunnelFamilyReport } from "@/lib/acquisition-router";
 import {
   hasEnoughSample,
+  MIN_SAMPLE_SIZE,
   type JourneyAggregate,
   type LandingAttributionReport,
   type VariantAttributionCounts,
 } from "@/lib/landing-attribution";
 import { getLandingAttributionReport, getLandingJourneyReport } from "@/lib/landing-attribution-report";
-import type { LandingVariant } from "@/generated/prisma/enums";
+import {
+  getDiagnosticFunnelReport,
+  getDiagnosticSegmentationReport,
+  type DiagnosticSegmentationReport,
+} from "@/lib/diagnostic-report";
+import type { DiagnosticFunnelRates, DiagnosticSegmentCount } from "@/lib/diagnostic-rates";
+import {
+  getDiagnosticHeroExperimentReport,
+  type DiagnosticHeroVariantReport,
+} from "@/lib/diagnostic-hero-experiment";
+import type { LandingVariant, DiagnosticHeroVariant, FunnelFamily } from "@/generated/prisma/enums";
 import { AdminLogin } from "./admin-login";
 import { MetaSyncButton } from "./meta-sync-button";
 import { MetaAssociation } from "./meta-association";
@@ -54,11 +66,15 @@ export default async function AdminPage() {
   const [
     orders,
     lastMetaSyncAt,
+    acquisitionRouterReport,
     pricingReport,
     heroReport,
     landingReport,
     landingAttributionReport,
     landingJourneyReport,
+    diagnosticFunnelReport,
+    diagnosticSegmentationReport,
+    diagnosticHeroExperimentReport,
   ] = await Promise.all([
     prisma.order.findMany({
       orderBy: { createdAt: "desc" },
@@ -72,11 +88,15 @@ export default async function AdminPage() {
       },
     }),
     getLastMetaSyncAt(),
+    getAcquisitionRouterFamilyReport(),
     getPricingExperimentReport(),
     getHeroExperimentReport(),
     getLandingExperimentReport(),
     getLandingAttributionReport(),
     getLandingJourneyReport(),
+    getDiagnosticFunnelReport(),
+    getDiagnosticSegmentationReport(),
+    getDiagnosticHeroExperimentReport(),
   ]);
 
   return (
@@ -93,6 +113,8 @@ export default async function AdminPage() {
         </form>
       </div>
 
+      <AcquisitionRouterSection report={acquisitionRouterReport} />
+
       <PricingExperimentSection report={pricingReport} />
 
       <HeroExperimentSection report={heroReport} />
@@ -102,6 +124,10 @@ export default async function AdminPage() {
       <LandingAttributionSection report={landingAttributionReport} />
 
       <LandingJourneySection journeys={landingJourneyReport} />
+
+      <DiagnosticHeroExperimentSection report={diagnosticHeroExperimentReport} />
+
+      <DiagnosticFunnelSection report={diagnosticFunnelReport} segmentation={diagnosticSegmentationReport} />
 
       <div className="mt-10 flex flex-wrap items-end justify-between gap-4">
         <div>
@@ -370,7 +396,7 @@ function compactAttributionLabel(order: OrderAttribution): string | null {
 
 /**
  * Atribuição de marketing (de onde veio o cliente), dividida em duas
- * origens independentes — snapshots capturados no `middleware.ts`/
+ * origens independentes — snapshots capturados no `proxy.ts`/
  * `src/lib/attribution.ts` no momento em que a Order foi criada:
  * - PRIMEIRA ORIGEM: first-touch, nunca muda depois da primeira visita.
  * - ÚLTIMA ORIGEM PAGA: last paid touch, última campanha PAGA (ver
@@ -435,6 +461,89 @@ function AttributionRows({ rows }: { rows: [string, string | null][] }) {
         <StatRow key={label} label={label} value={value as string} />
       ))}
     </dl>
+  );
+}
+
+const FUNNEL_FAMILY_LABELS: Record<FunnelFamily, string> = {
+  LANDING: "Landing Pages",
+  DIAGNOSTIC: "Diagnóstico",
+};
+
+const FUNNEL_FAMILY_ORDER: FunnelFamily[] = ["LANDING", "DIAGNOSTIC"];
+
+/**
+ * Nível 1 do router de experimentos de `/go` (`acquisition_router_v1`, ver
+ * `src/lib/acquisition-router.ts`) — decide para que família de experimento
+ * cada visita vai (Landing Pages vs Diagnóstico) ANTES de qualquer sorteio
+ * de nível 2. `visitors` vem do evento dedicado `AcquisitionRouterEvent`
+ * (robusto e versionado, independente do que mudar nos experimentos
+ * filhos); o resto é a SOMA das 3 variantes de cada família, já lida pelas
+ * secções "A/B/C Test — Landing Pages" e "Diagnóstico — Teste de Hero" mais
+ * abaixo — nunca uma segunda pipeline de eventos financeiros. Tráfego de QA
+ * (`?family=`/`?variant=`) já vem excluído destes números. Métrica
+ * principal: conversão (visitante → pagamento) e receita por visitante, para
+ * decidir se vale a pena continuar a investir em cada família.
+ */
+function AcquisitionRouterSection({ report }: { report: FunnelFamilyReport[] }) {
+  const orderedReport = FUNNEL_FAMILY_ORDER.map(
+    (family) => report.find((entry) => entry.family === family) ?? null,
+  ).filter((entry): entry is FunnelFamilyReport => entry !== null);
+
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">Acquisition Router v1 — /go</h2>
+        <span className="rounded-full bg-red-strong/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-strong">
+          Experimento em curso
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        Nível 1 de `/go`: 50% do tráfego vai para as landing pages tradicionais, 50% para o funil
+        interativo `/diagnostico` (pesos configuráveis). As secções abaixo (Landing Pages e Teste
+        de Hero do Diagnóstico) mostram o nível 2 de cada família. Métrica principal: conversão
+        (visitante → pagamento) e receita por visitante.
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        {orderedReport.map((family) => (
+          <div key={family.family} className="rounded-md border border-line p-5">
+            <h3 className="text-[14px] font-bold">{FUNNEL_FAMILY_LABELS[family.family]}</h3>
+            <dl className="mt-3">
+              <StatRow label="Visitantes" value={formatNumber(family.visitors)} />
+              <StatRow label="Checkouts iniciados" value={formatNumber(family.checkoutsStarted)} />
+              <StatRow label="Encomendas criadas" value={formatNumber(family.ordersCreated)} />
+              <StatRow label="Compras (pagamentos concluídos)" value={formatNumber(family.paymentsCompleted)} />
+              <StatRow
+                label="Visitante → checkout iniciado"
+                value={formatRate(family.checkoutConversionRate)}
+              />
+              <StatRow
+                label="Purchase CR (visitante → pagamento)"
+                value={formatRateOrInsufficient(family.purchaseConversionRate, family.paymentsCompleted)}
+                highlight
+              />
+              <StatRow
+                label="Receita"
+                value={
+                  hasEnoughSample(family.paymentsCompleted)
+                    ? formatPrice(family.revenueCents)
+                    : "Dados insuficientes"
+                }
+              />
+              <StatRow
+                label="Receita por visitante"
+                value={
+                  hasEnoughSample(family.paymentsCompleted) && family.revenuePerVisitorCents !== null
+                    ? formatPrice(Math.round(family.revenuePerVisitorCents))
+                    : "Dados insuficientes"
+                }
+                highlight
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -803,6 +912,280 @@ function LandingJourneySection({ journeys }: { journeys: JourneyAggregate[] }) {
           ))}
         </dl>
       )}
+    </section>
+  );
+}
+
+const DIAGNOSTIC_HERO_VARIANT_LABELS: Record<DiagnosticHeroVariant, string> = {
+  PAIN: "A — Dor",
+  WORD_OF_MOUTH: "B — Boca-a-boca",
+  GROWTH: "C — Crescimento",
+};
+
+const DIAGNOSTIC_HERO_VARIANT_ORDER: DiagnosticHeroVariant[] = ["PAIN", "WORD_OF_MOUTH", "GROWTH"];
+
+/** Mostra "Dados insuficientes" em vez da taxa quando a amostra (visitantes
+ * ou compras, dependendo da métrica) ainda é pequena demais para sugerir
+ * qualquer vencedor — mesmo corte simples de `hasEnoughSample` (30). */
+function formatRateOrInsufficient(value: number | null, sampleSize: number): string {
+  if (!hasEnoughSample(sampleSize)) return "Dados insuficientes";
+  return formatRate(value);
+}
+
+/**
+ * Resultados do A/B/C test da headline+subtítulo do Hero de `/diagnostico`
+ * (`diagnostic_hero_v1`, ver `src/lib/diagnostic-hero-experiment.ts`) — só a
+ * mensagem do Hero muda entre as 3 variantes, todo o resto do funil é
+ * idêntico. Tráfego de QA (`?hero=`/`?diagnostic_debug=true`) já vem
+ * excluído destes números. Métrica principal: Diagnostic Start Rate
+ * (visitante exposto ao Hero → diagnóstico iniciado). "Dados insuficientes"
+ * aparece nas taxas de compra/receita e na taxa principal enquanto a
+ * amostra relevante tiver menos de {MIN_SAMPLE_SIZE} — nunca declarar
+ * vencedor cedo demais só pelo clique (secção 10 do pedido): comparar
+ * sempre a taxa de início com completion/checkout/purchase rate e receita
+ * por visitante antes de tirar conclusões.
+ */
+function DiagnosticHeroExperimentSection({ report }: { report: DiagnosticHeroVariantReport[] }) {
+  const orderedReport = DIAGNOSTIC_HERO_VARIANT_ORDER.map(
+    (variant) => report.find((entry) => entry.variant === variant) ?? null,
+  ).filter((entry): entry is DiagnosticHeroVariantReport => entry !== null);
+
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">Diagnóstico — Teste de Hero</h2>
+        <span className="rounded-full bg-red-strong/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-red-strong">
+          Experimento em curso
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        A — &quot;Se amanhã precisasse de mais clientes...&quot; (dor/previsibilidade) · B —
+        &quot;O seu negócio depende demasiado do boca-a-boca?&quot; · C — &quot;Descubra o que
+        pode estar a limitar o crescimento...&quot; (crescimento/oportunidade). Só headline +
+        subtítulo do Hero mudam — resto de `/diagnostico` é idêntico nas 3. Métrica principal:
+        Diagnostic Start Rate (visitante exposto → diagnóstico iniciado).
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-3">
+        {orderedReport.map((variant) => (
+          <div key={variant.variant} className="rounded-md border border-line p-5">
+            <h3 className="text-[14px] font-bold">{DIAGNOSTIC_HERO_VARIANT_LABELS[variant.variant]}</h3>
+            <dl className="mt-3">
+              <StatRow label="Visitantes (viram o Hero)" value={formatNumber(variant.visitors)} />
+              <StatRow label="Cliques em «Fazer diagnóstico»" value={formatNumber(variant.ctaClicks)} />
+              <StatRow label="Visitante → clique no CTA" value={formatRate(variant.ctaClickRate)} />
+              <StatRow label="Diagnósticos iniciados" value={formatNumber(variant.starts)} />
+              <StatRow
+                label="Diagnostic Start Rate"
+                value={formatRateOrInsufficient(variant.startRate, variant.visitors)}
+                highlight
+              />
+              <StatRow label="Diagnósticos concluídos" value={formatNumber(variant.completed)} />
+              <StatRow label="Início → concluído" value={formatRate(variant.completionRate)} />
+              <StatRow label="Preview iniciado" value={formatNumber(variant.previewStarted)} />
+              <StatRow label="Preview concluído" value={formatNumber(variant.previewCompleted)} />
+              <StatRow label="Concluído → preview iniciado" value={formatRate(variant.previewRate)} />
+              <StatRow label="Checkouts iniciados (/pedido)" value={formatNumber(variant.checkoutStarted)} />
+              <StatRow label="Concluído → checkout iniciado" value={formatRate(variant.checkoutRate)} />
+              <StatRow label="Encomendas criadas" value={formatNumber(variant.ordersCreated)} />
+              <StatRow label="Compras (pagamentos concluídos)" value={formatNumber(variant.paymentsCompleted)} />
+              <StatRow
+                label="Purchase CR (visitante → pagamento)"
+                value={formatRateOrInsufficient(variant.purchaseRate, variant.paymentsCompleted)}
+                highlight
+              />
+              <StatRow
+                label="Receita"
+                value={
+                  hasEnoughSample(variant.paymentsCompleted)
+                    ? formatPrice(variant.revenueCents)
+                    : "Dados insuficientes"
+                }
+              />
+              <StatRow
+                label="Receita por visitante"
+                value={
+                  hasEnoughSample(variant.paymentsCompleted) && variant.revenuePerVisitorCents !== null
+                    ? formatPrice(Math.round(variant.revenuePerVisitorCents))
+                    : "Dados insuficientes"
+                }
+                highlight
+              />
+            </dl>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/** Uma tabela compacta (valor da resposta · compras · receita) para uma dimensão de segmentação. */
+function DiagnosticSegmentTable({ title, counts }: { title: string; counts: DiagnosticSegmentCount[] }) {
+  return (
+    <div className="rounded-md border border-line p-5">
+      <h3 className="text-[14px] font-bold">{title}</h3>
+      {counts.length === 0 ? (
+        <p className="mt-2 text-[13px] text-muted">Ainda sem compras com esta resposta.</p>
+      ) : (
+        <dl className="mt-2">
+          {counts.map((count) => (
+            <div
+              key={count.value}
+              className="flex items-center justify-between border-b border-line/60 py-2 last:border-0"
+            >
+              <dt className="text-[13px] text-muted">{count.label}</dt>
+              <dd className="text-right text-[13px] font-semibold text-ink">
+                {hasEnoughSample(count.purchases) ? (
+                  <>
+                    {formatNumber(count.purchases)} compras · {formatPrice(count.revenueCents)}
+                  </>
+                ) : (
+                  <span className="text-muted">
+                    {formatNumber(count.purchases)} compras · dados insuficientes
+                  </span>
+                )}
+              </dd>
+            </div>
+          ))}
+        </dl>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Funil próprio de `/diagnostico` (diagnóstico → resultado → preview do
+ * anúncio → recomendação → checkout — ver `src/lib/diagnostic-report.ts`).
+ * Não é um teste A/B/C (não há sorteio nem variantes): é uma origem de
+ * tráfego adicional, comparável às outras via `Order.funnelSource`. Métrica
+ * principal: conversão (início do diagnóstico → pagamento).
+ */
+function DiagnosticFunnelSection({
+  report,
+  segmentation,
+}: {
+  report: DiagnosticFunnelRates;
+  segmentation: DiagnosticSegmentationReport;
+}) {
+  return (
+    <section className="mt-10 rounded-lg border border-line p-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-[18px] font-black">Funil de Diagnóstico (/diagnostico)</h2>
+        <span className="rounded-full bg-ink/10 px-3 py-1 text-[11px] font-bold uppercase tracking-[0.06em] text-ink">
+          Origem de tráfego
+        </span>
+      </div>
+      <p className="mt-1.5 text-[13px] text-muted">
+        6 perguntas → resultado personalizado → preview do anúncio → recomendação de campanha →
+        checkout pré-preenchido. Métrica principal: início do diagnóstico → pagamento.
+      </p>
+
+      <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="rounded-md border border-line p-5">
+          <h3 className="text-[14px] font-bold">Funil (início → resultado → preview)</h3>
+          <dl className="mt-3">
+            <StatRow label="Visitantes que começaram" value={formatNumber(report.visitors)} />
+            <StatRow label="Diagnósticos iniciados" value={formatNumber(report.starts)} />
+            <StatRow label="Diagnósticos concluídos (6 respostas)" value={formatNumber(report.completed)} />
+            <StatRow
+              label="Início → concluído"
+              value={formatRate(report.startToCompletedRate)}
+            />
+            <StatRow label="Resultado visto" value={formatNumber(report.resultViewed)} />
+            <StatRow
+              label="Concluído → resultado visto"
+              value={formatRate(report.completedToResultRate)}
+            />
+            <StatRow label="Preview iniciado" value={formatNumber(report.previewStarted)} />
+            <StatRow
+              label="Resultado → preview iniciado"
+              value={formatRate(report.resultToPreviewRate)}
+            />
+            <StatRow label="Preview concluído" value={formatNumber(report.previewCompleted)} />
+          </dl>
+        </div>
+
+        <div className="rounded-md border border-line p-5">
+          <h3 className="text-[14px] font-bold">Recomendação → checkout → pagamento</h3>
+          <dl className="mt-3">
+            <StatRow label="Recomendação vista" value={formatNumber(report.recommendationViewed)} />
+            <StatRow
+              label="Preview → recomendação vista"
+              value={formatRate(report.previewToRecommendationRate)}
+            />
+            <StatRow
+              label="Clique no plano recomendado"
+              value={formatNumber(report.recommendedPlanClicked)}
+            />
+            <StatRow
+              label="Recomendação → clique no plano"
+              value={formatRate(report.recommendationToPlanClickRate)}
+            />
+            <StatRow label="Checkouts iniciados (/pedido)" value={formatNumber(report.checkoutStarted)} />
+            <StatRow
+              label="Clique no plano → checkout iniciado"
+              value={formatRate(report.planClickToCheckoutRate)}
+            />
+            <StatRow label="Cliques em pagar" value={formatNumber(report.paymentClicks)} />
+            <StatRow
+              label="Checkout iniciado → clique em pagar"
+              value={formatRate(report.checkoutToPaymentClickRate)}
+            />
+            <StatRow label="Stripe sessions criadas" value={formatNumber(report.stripeSessionsCreated)} />
+            <StatRow
+              label="Clique em pagar → Stripe session criada"
+              value={formatRate(report.paymentClickToSessionRate)}
+            />
+            <StatRow label="Encomendas criadas" value={formatNumber(report.ordersCreated)} />
+            <StatRow label="Pagamentos concluídos" value={formatNumber(report.paymentsCompleted)} />
+            <StatRow
+              label="Stripe session criada → pagamento"
+              value={formatRate(report.sessionToPaymentRate)}
+            />
+            <StatRow
+              label="Conversão (início → pagamento)"
+              value={formatRate(report.purchaseConversionRate)}
+              highlight
+            />
+            <StatRow label="Receita total" value={formatPrice(report.revenueCents)} />
+            <StatRow
+              label="Receita por início"
+              value={
+                report.revenuePerStartCents !== null
+                  ? formatPrice(Math.round(report.revenuePerStartCents))
+                  : "—"
+              }
+              highlight
+            />
+            <StatRow
+              label="Receita por diagnóstico concluído"
+              value={
+                report.revenuePerCompletedCents !== null
+                  ? formatPrice(Math.round(report.revenuePerCompletedCents))
+                  : "—"
+              }
+            />
+          </dl>
+        </div>
+      </div>
+
+      <h3 className="mt-6 text-[13px] font-bold uppercase tracking-[0.1em] text-muted">
+        Segmentação das compras por resposta
+      </h3>
+      <p className="mt-1 text-[12px] text-muted">
+        Só compras pagas vindas do diagnóstico. &quot;Dados insuficientes&quot; abaixo de{" "}
+        {MIN_SAMPLE_SIZE} compras nesse valor, para não sugerir conclusões precipitadas.
+      </p>
+      <div className="mt-3 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <DiagnosticSegmentTable title="Canal de aquisição hoje" counts={segmentation.byChannel} />
+        <DiagnosticSegmentTable title="Urgência" counts={segmentation.byUrgency} />
+        <DiagnosticSegmentTable title="Objetivo" counts={segmentation.byGoal} />
+        <DiagnosticSegmentTable
+          title="Alcance previsível (auto-avaliado)"
+          counts={segmentation.byPredictableReach}
+        />
+        <DiagnosticSegmentTable title="Pack recomendado" counts={segmentation.byRecommendedPack} />
+      </div>
     </section>
   );
 }

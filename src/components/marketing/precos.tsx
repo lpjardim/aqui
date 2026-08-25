@@ -5,7 +5,7 @@ import { PrecosToggle } from "@/components/marketing/precos-toggle";
 /**
  * Server Component fino: decide server-side (sem flicker) qual variante do
  * A/B test de preços mostrar — a variante já vem atribuída pelo
- * `middleware.ts` antes deste render. Heading/subtítulo/"Precisa de outro
+ * `proxy.ts` antes deste render. Heading/subtítulo/"Precisa de outro
  * volume?" são idênticos em ambas as variantes; só a zona dos cards muda.
  */
 export async function Precos() {

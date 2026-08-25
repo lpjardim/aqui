@@ -10,7 +10,7 @@ const GUARANTEES = ["Sem chamadas", "Visualizações garantidas", "Comprovativo 
 /**
  * A/B test independente do teste de preços — só a headline muda entre
  * variantes (ver `src/lib/hero-experiment.ts`). Server Component: a
- * variante já vem atribuída pelo `middleware.ts` antes deste render, sem
+ * variante já vem atribuída pelo `proxy.ts` antes deste render, sem
  * flicker nem troca depois de montar.
  */
 export async function Hero() {

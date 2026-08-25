@@ -18,7 +18,7 @@ export type PricingContext = {
 };
 
 /**
- * Lê a variante/visitante/debug já atribuídos pelo `middleware.ts` (cookies
+ * Lê a variante/visitante/debug já atribuídos pelo `proxy.ts` (cookies
  * `pricing_variant`/`aqui_vid`/`experiment_debug`). É a ÚNICA fonte de
  * verdade para a variante efetiva de cada request — nunca se confia num
  * valor de variante vindo do body de um pedido ou de um evento do cliente,

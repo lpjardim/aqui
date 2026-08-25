@@ -16,19 +16,45 @@ import {
   isLikelyBot,
   parseForcedLandingVariant,
   parseLandingSession,
-  randomLandingVariant,
   serializeLandingSession,
   type LandingSessionState,
   type LandingVariantValue,
 } from "@/lib/landing-experiment-constants";
+import {
+  DIAGNOSTIC_HERO_SESSION_COOKIE,
+  DIAGNOSTIC_PATH,
+  parseDiagnosticHeroSession,
+  parseForcedDiagnosticHeroVariant,
+  randomDiagnosticHeroVariant,
+  serializeDiagnosticHeroSession,
+  type DiagnosticHeroSessionState,
+} from "@/lib/diagnostic-hero-constants";
+import {
+  ACQUISITION_ROUTER_ID,
+  ACQUISITION_ROUTER_SESSION_COOKIE,
+  parseAcquisitionRouterSession,
+  parseForcedFunnelFamily,
+  pickFunnelFamily,
+  pickLandingVariant,
+  serializeAcquisitionRouterSession,
+  type AcquisitionRouterSessionState,
+  type FunnelFamilyValue,
+} from "@/lib/acquisition-router-constants";
 
 /**
- * A/B test da secção de preços — atribuição 50/50 feita aqui (Edge, antes de
+ * A/B test da secção de preços — atribuição 50/50 feita aqui (antes de
  * qualquer render) para que o Server Component da homepage já veja a
  * variante correta na MESMA resposta, sem flicker nem troca depois de
  * montar. Segue o padrão oficial do Next.js: a cookie é escrita tanto no
  * `request` (para o resto do pipeline desta própria request já a ver) como
  * na `response` (para persistir no browser nas próximas visitas).
+ *
+ * Renomeado de `middleware.ts` para `proxy.ts` (Next.js 16 depreciou o
+ * ficheiro `middleware.ts`/export `middleware` a favor de `proxy.ts`/export
+ * `proxy` — mesma lógica, mesma API `NextRequest`/`NextResponse`/`config.matcher`,
+ * só corre sempre em runtime Node.js em vez de Edge). Sem isto o Next.js
+ * 16.3 nunca invoca este ficheiro e NENHUMA das cookies/experiments abaixo é
+ * atribuída.
  *
  * Cookies geridas aqui:
  * - `pricing_variant` ("A" | "B") — 30 dias, atribuída uma única vez.
@@ -72,24 +98,48 @@ import {
  *   sobrescreve — só uma nova visita paga o faz. Complementa o first-touch
  *   para otimização de spend em Ads (ver `src/lib/attribution.ts`).
  *
- * Rota `/go` — experimento A/B/C das 3 landing pages (`landing_page_v1`, ver
- * `src/lib/landing-experiment-constants.ts`). Todos os Meta Ads apontam para
- * `aqui.network/go`; esta rota nunca renderiza nada — só decide a variante e
- * redireciona (307, `Cache-Control: no-store` para nunca ser cacheada por
- * CDN/browser, o que quebraria a randomização para todos os visitantes
- * seguintes com o mesmo URL de campanha) preservando todos os query params
- * (UTMs, `fbclid`, etc.).
- * - `landing_session` — variante (normal/sales/blog) + `experiment_visit_id`
- *   + snapshot da atribuição desta entrada, tudo num único JSON. AO
- *   CONTRÁRIO de `pricing_variant`/`hero_variant`, esta cookie NUNCA leva
- *   `Max-Age`/`Expires` — é uma cookie de sessão pura, morre quando o browser
- *   fecha por completo. Isto é intencional: o pedido é explícito em nunca
- *   prender um visitante para sempre à mesma variante (uma nova sessão faz
- *   sempre um novo sorteio), mas sem trocar de variante a meio da mesma
- *   sessão (refresh/back/navegação imediata). Só é atribuída em `/go`; as
+ * Rota `/go` — router de experimentos de 2 níveis (`acquisition_router_v1`,
+ * ver `src/lib/acquisition-router-constants.ts`). Todos os Meta Ads apontam
+ * para `aqui.network/go`; esta rota nunca renderiza nada — só decide a
+ * família + variante e redireciona (307, `Cache-Control: no-store` para
+ * nunca ser cacheada por CDN/browser, o que quebraria a randomização para
+ * todos os visitantes seguintes com o mesmo URL de campanha) preservando
+ * todos os query params (UTMs, `fbclid`, etc.).
+ * - NÍVEL 1 — família (`LANDING` 50% vs `DIAGNOSTIC` 50%, pesos
+ *   configuráveis em `ACQUISITION_ROUTER_CONFIG`): decidida sempre aqui.
+ *   `acquisition_router_session` guarda `routerExperimentId` + `funnelFamily`
+ *   + `isDebug`. AO CONTRÁRIO de `pricing_variant`/`hero_variant`, esta
+ *   cookie NUNCA leva `Max-Age`/`Expires` — cookie de sessão pura, morre
+ *   quando o browser fecha por completo (nunca prende um visitante para
+ *   sempre à mesma família, mas mantém-se durante toda a sessão).
+ * - NÍVEL 2 (só quando família = `LANDING`) — variante entre as 3 landing
+ *   pages (normal/sales/blog), exatamente como antes desta feature.
+ *   `landing_session` guarda a variante + `experiment_visit_id` + snapshot
+ *   da atribuição desta entrada, tudo num único JSON, também sem
+ *   `Max-Age`/`Expires`. Quando a família é `DIAGNOSTIC`, esta cookie nunca
+ *   é escrita — o redirect vai direto para `/diagnostico`, cujo próprio
+ *   bloco abaixo decide a variante do Hero (nível 2 do lado diagnóstico,
+ *   nunca duplicado aqui). Tráfego de QA forçado via `/go?family=diagnostic`
+ *   (sem `?hero=` explícito) propaga `diagnostic_debug=true` no redirect,
+ *   para nunca contaminar o teste do Hero. Só é atribuída em `/go`; as
  *   próprias páginas de destino nunca reatribuem.
  * - `aqui_sid` — `session_id` genérico (uuid), também sem `Max-Age` — mesma
  *   ideia de `aqui_vid`, mas por sessão em vez de por visitante.
+ *
+ * `/diagnostico` — A/B/C test da headline+subtítulo do Hero deste funil
+ * (`diagnostic_hero_v1`, ver `src/lib/diagnostic-hero-constants.ts`). Só a
+ * mensagem do Hero muda entre variantes; todo o resto da página é idêntico.
+ * - `diagnostic_hero_session` — variante (`PAIN`/`WORD_OF_MOUTH`/`GROWTH`) +
+ *   `isDebug`, num único JSON. Mesmo princípio do `landing_session`: NUNCA
+ *   leva `Max-Age`/`Expires` (cookie de sessão pura), para nunca prender um
+ *   visitante para sempre à mesma variante mas manter a mesma durante toda a
+ *   sessão (refresh/back/navegação imediata). Ao contrário do
+ *   `landing_page_v1`, não há redirect — a variante é decidida aqui e a
+ *   própria página lê a cookie já atribuída (evita hydration
+ *   mismatch/flash). Override manual via `/diagnostico?hero=pain|
+ *   word_of_mouth|growth` marca sempre `isDebug: true` (nunca entra nos
+ *   KPIs, nem do teste do Hero nem do funil geral — ver
+ *   `getDiagnosticVisitorContext`).
  */
 
 const PRICING_VARIANT_COOKIE = "pricing_variant";
@@ -97,6 +147,7 @@ const HERO_VARIANT_COOKIE = "hero_variant";
 const VISITOR_ID_COOKIE = "aqui_vid";
 const DEBUG_COOKIE = "experiment_debug";
 const HERO_DEBUG_COOKIE = "hero_debug";
+const DIAGNOSTIC_DEBUG_COOKIE = "diagnostic_debug";
 const FBC_PENDING_COOKIE = "_fbc_pending";
 const FBC_SUBDOMAIN_INDEX = 1;
 
@@ -110,44 +161,76 @@ function randomVariant(): "A" | "B" {
 }
 
 /**
- * Constrói a resposta de redirect de `/go` — variante da sessão + novo
- * `experiment_visit_id`, sempre preservando os query params originais
- * (exceto `variant`, que é só o override de QA). Bots/crawlers óbvios nunca
- * recebem cookie de sessão (logo nunca entram no experimento nem geram
- * exposição), mas continuam a ser redirecionados normalmente para a home.
+ * Constrói a resposta de redirect de `/go` — router de experimentos de 2
+ * níveis (`acquisition_router_v1`): decide primeiro a FAMÍLIA
+ * (`LANDING`/`DIAGNOSTIC`, nível 1) e só depois, se `LANDING`, a variante
+ * entre as 3 páginas (nível 2 — o nível 2 do lado `DIAGNOSTIC` continua a
+ * ser decidido só pelo bloco `DIAGNOSTIC_PATH` mais abaixo, no pedido
+ * seguinte a este redirect). Sempre preserva os query params originais
+ * (exceto `variant`/`family`, que são só overrides de QA). Bots/crawlers
+ * óbvios nunca recebem nenhuma das duas cookies (logo nunca entram no
+ * router nem geram exposição), mas continuam a ser redirecionados
+ * normalmente para a home.
  */
 function buildGoRedirect(request: NextRequest): NextResponse {
   const { searchParams } = request.nextUrl;
   const forcedVariant = parseForcedLandingVariant(searchParams.get("variant"));
-  const bot = !forcedVariant && isLikelyBot(request.headers.get("user-agent"));
+  const forcedFamilyParam = parseForcedFunnelFamily(searchParams.get("family"));
+  // `?variant=` é um override histórico só de nível 2 — continua a implicar
+  // família LANDING forçada, exatamente como antes desta feature.
+  const forcedFamily: FunnelFamilyValue | null = forcedVariant ? "LANDING" : forcedFamilyParam;
+  const bot = !forcedVariant && !forcedFamilyParam && isLikelyBot(request.headers.get("user-agent"));
 
-  let variant: LandingVariantValue;
+  let funnelFamily: FunnelFamilyValue;
   let isDebug: boolean;
 
-  if (!bot) {
-    if (forcedVariant) {
-      variant = forcedVariant;
-      isDebug = true;
-    } else {
-      const existing = parseLandingSession(request.cookies.get(LANDING_SESSION_COOKIE)?.value);
-      if (existing) {
-        variant = existing.variant;
-        isDebug = existing.isDebug;
-      } else {
-        variant = randomLandingVariant();
-        isDebug = false;
-      }
-    }
-  } else {
-    variant = "NORMAL";
+  if (bot) {
+    funnelFamily = "LANDING";
     isDebug = false;
+  } else if (forcedFamily) {
+    funnelFamily = forcedFamily;
+    isDebug = true;
+  } else {
+    const existingRouterSession = parseAcquisitionRouterSession(
+      request.cookies.get(ACQUISITION_ROUTER_SESSION_COOKIE)?.value,
+    );
+    if (existingRouterSession) {
+      funnelFamily = existingRouterSession.funnelFamily;
+      isDebug = existingRouterSession.isDebug;
+    } else {
+      funnelFamily = pickFunnelFamily();
+      isDebug = false;
+    }
   }
 
-  const targetUrl = new URL(LANDING_ROUTES[variant], request.url);
+  let landingVariant: LandingVariantValue | null = null;
+  if (bot) {
+    landingVariant = "NORMAL";
+  } else if (funnelFamily === "LANDING") {
+    if (forcedVariant) {
+      landingVariant = forcedVariant;
+    } else {
+      const existingLandingSession = parseLandingSession(
+        request.cookies.get(LANDING_SESSION_COOKIE)?.value,
+      );
+      landingVariant = existingLandingSession?.variant ?? pickLandingVariant();
+    }
+  }
+
+  const targetPath = funnelFamily === "LANDING" ? LANDING_ROUTES[landingVariant!] : DIAGNOSTIC_PATH;
+  const targetUrl = new URL(targetPath, request.url);
   searchParams.forEach((value, key) => {
-    if (key === "variant") return;
+    if (key === "variant" || key === "family") return;
     targetUrl.searchParams.set(key, value);
   });
+
+  // Propaga o debug do router para o experimento filho do diagnóstico —
+  // reaproveita o mecanismo `?diagnostic_debug=` já existente mais abaixo,
+  // para tráfego de QA do router nunca contaminar os KPIs do teste do Hero.
+  // Do lado LANDING isto já é automático: `isDebug` alimenta `landing_session`.
+  if (!bot && funnelFamily === "DIAGNOSTIC" && isDebug) {
+    targetUrl.searchParams.set("diagnostic_debug", "true");
+  }
 
   const response = NextResponse.redirect(targetUrl, 307);
   // Nunca cacheável: o URL de campanha é sempre o mesmo para todos os
@@ -156,31 +239,51 @@ function buildGoRedirect(request: NextRequest): NextResponse {
   response.headers.set("Cache-Control", "no-store, private");
 
   if (!bot) {
-    const { attribution, fbclid } = buildLandingAttributionSnapshot(searchParams);
-    const sessionState: LandingSessionState = {
-      variant,
-      visitId: crypto.randomUUID(),
+    const routerSessionState: AcquisitionRouterSessionState = {
+      routerExperimentId: ACQUISITION_ROUTER_ID,
+      funnelFamily,
       isDebug,
-      attribution,
-      fbclid,
     };
-    response.cookies.set(LANDING_SESSION_COOKIE, serializeLandingSession(sessionState), {
-      path: "/",
-      httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
-      // Sem `maxAge`/`expires` de propósito — cookie de sessão, nunca sticky.
-    });
+    response.cookies.set(
+      ACQUISITION_ROUTER_SESSION_COOKIE,
+      serializeAcquisitionRouterSession(routerSessionState),
+      {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        // Sem `maxAge`/`expires` de propósito — cookie de sessão, nunca sticky.
+      },
+    );
+
+    if (funnelFamily === "LANDING") {
+      const { attribution, fbclid } = buildLandingAttributionSnapshot(searchParams);
+      const sessionState: LandingSessionState = {
+        variant: landingVariant!,
+        visitId: crypto.randomUUID(),
+        isDebug,
+        attribution,
+        fbclid,
+      };
+      response.cookies.set(LANDING_SESSION_COOKIE, serializeLandingSession(sessionState), {
+        path: "/",
+        httpOnly: true,
+        sameSite: "lax",
+        secure: process.env.NODE_ENV === "production",
+        // Sem `maxAge`/`expires` de propósito — cookie de sessão, nunca sticky.
+      });
+    }
   }
 
   return response;
 }
 
-export function middleware(request: NextRequest) {
+export function proxy(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl;
   const forcedVariantParam = searchParams.get("a_variant");
   const forcedHeroVariantParam = searchParams.get("h_variant");
   const debugParam = searchParams.get("experiment_debug");
+  const diagnosticDebugParam = searchParams.get("diagnostic_debug");
 
   const forcedVariant =
     forcedVariantParam === "A" || forcedVariantParam === "B" ? forcedVariantParam : null;
@@ -233,6 +336,52 @@ export function middleware(request: NextRequest) {
         sameSite: "lax",
       });
     }
+  }
+
+  // Debug do funil `/diagnostico` — `?diagnostic_debug=true|false`, mesmo
+  // padrão do `experiment_debug` genérico acima, mas independente (o
+  // diagnóstico não é sorteado, por isso não partilha `wantsGenericDebug`).
+  if (diagnosticDebugParam === "false") {
+    request.cookies.delete(DIAGNOSTIC_DEBUG_COOKIE);
+    response.cookies.delete(DIAGNOSTIC_DEBUG_COOKIE);
+  } else if (diagnosticDebugParam === "true") {
+    request.cookies.set(DIAGNOSTIC_DEBUG_COOKIE, "1");
+    response.cookies.set(DIAGNOSTIC_DEBUG_COOKIE, "1", {
+      maxAge: ONE_DAY,
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+    });
+  }
+
+  // A/B/C test do Hero de `/diagnostico` (`diagnostic_hero_v1`) — atribuição
+  // por SESSÃO, decidida aqui (antes do Server Component renderizar) para a
+  // própria página já ver a variante correta na MESMA resposta, sem
+  // flicker. Só corre para esta rota exata: qualquer outra página nunca
+  // atribui nem lê esta cookie.
+  if (pathname === DIAGNOSTIC_PATH) {
+    const forcedDiagnosticHeroVariant = parseForcedDiagnosticHeroVariant(searchParams.get("hero"));
+    const existingHeroSession = parseDiagnosticHeroSession(
+      request.cookies.get(DIAGNOSTIC_HERO_SESSION_COOKIE)?.value,
+    );
+
+    let heroSession: DiagnosticHeroSessionState;
+    if (forcedDiagnosticHeroVariant) {
+      heroSession = { variant: forcedDiagnosticHeroVariant, isDebug: true };
+    } else if (existingHeroSession) {
+      heroSession = existingHeroSession;
+    } else {
+      heroSession = { variant: randomDiagnosticHeroVariant(), isDebug: false };
+    }
+
+    const serialized = serializeDiagnosticHeroSession(heroSession);
+    request.cookies.set(DIAGNOSTIC_HERO_SESSION_COOKIE, serialized);
+    response.cookies.set(DIAGNOSTIC_HERO_SESSION_COOKIE, serialized, {
+      path: "/",
+      httpOnly: true,
+      sameSite: "lax",
+      // Sem `maxAge`/`expires` de propósito — cookie de sessão, nunca sticky.
+    });
   }
 
   if (!request.cookies.get(PRICING_VARIANT_COOKIE)) {

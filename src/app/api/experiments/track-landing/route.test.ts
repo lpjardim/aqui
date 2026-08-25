@@ -1,14 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LandingEventType, LandingVariant } from "@/generated/prisma/enums";
 
-const { getLandingContextMock, recordLandingExperimentEventMock } = vi.hoisted(() => ({
+const {
+  getLandingContextMock,
+  recordLandingExperimentEventMock,
+  getAcquisitionRouterContextMock,
+  recordAcquisitionRouterAssignmentMock,
+} = vi.hoisted(() => ({
   getLandingContextMock: vi.fn(),
   recordLandingExperimentEventMock: vi.fn(async () => {}),
+  getAcquisitionRouterContextMock: vi.fn(),
+  recordAcquisitionRouterAssignmentMock: vi.fn(async () => {}),
 }));
 
 vi.mock("@/lib/landing-experiment", () => ({
   getLandingContext: getLandingContextMock,
   recordLandingExperimentEvent: recordLandingExperimentEventMock,
+}));
+
+vi.mock("@/lib/acquisition-router", () => ({
+  getAcquisitionRouterContext: getAcquisitionRouterContextMock,
+  recordAcquisitionRouterAssignment: recordAcquisitionRouterAssignmentMock,
 }));
 
 function request(body: unknown): Request {
@@ -53,10 +65,19 @@ const inactiveContext = {
   session: null,
 };
 
+const noRouterContext = {
+  funnelFamily: null,
+  routerExperimentId: null,
+  visitorId: "vid_1",
+  sessionId: "sid_1",
+  isDebug: false,
+};
+
 describe("POST /api/experiments/track-landing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getLandingContextMock.mockResolvedValue(activeContext);
+    getAcquisitionRouterContextMock.mockResolvedValue(noRouterContext);
   });
 
   it("devolve 400 para um evento desconhecido", async () => {
@@ -132,5 +153,72 @@ describe("POST /api/experiments/track-landing", () => {
     expect(recordLandingExperimentEventMock).toHaveBeenCalledWith(
       expect.objectContaining({ context: activeContext }),
     );
+  });
+});
+
+describe("POST /api/experiments/track-landing — mirror do acquisition_router_assignment", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getLandingContextMock.mockResolvedValue(activeContext);
+    getAcquisitionRouterContextMock.mockResolvedValue(noRouterContext);
+  });
+
+  it("grava acquisition_router_assignment quando a sessão do router indica família LANDING", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: "LANDING",
+      routerExperimentId: "acquisition_router_v1",
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
+    const { POST } = await import("@/app/api/experiments/track-landing/route");
+
+    await POST(request({ event: "experiment_exposure" }));
+
+    expect(recordAcquisitionRouterAssignmentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        routerContext: expect.objectContaining({ funnelFamily: "LANDING" }),
+        landingVariant: activeContext.variant,
+      }),
+    );
+  });
+
+  it("não grava acquisition_router_assignment quando a sessão do router é ausente (visita direta, fora de /go)", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue(noRouterContext);
+    const { POST } = await import("@/app/api/experiments/track-landing/route");
+
+    await POST(request({ event: "experiment_exposure" }));
+
+    expect(recordAcquisitionRouterAssignmentMock).not.toHaveBeenCalled();
+  });
+
+  it("não grava acquisition_router_assignment quando a família do router é DIAGNOSTIC (nunca deveria acontecer, mas nunca duplica)", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: "DIAGNOSTIC",
+      routerExperimentId: "acquisition_router_v1",
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
+    const { POST } = await import("@/app/api/experiments/track-landing/route");
+
+    await POST(request({ event: "experiment_exposure" }));
+
+    expect(recordAcquisitionRouterAssignmentMock).not.toHaveBeenCalled();
+  });
+
+  it("não grava acquisition_router_assignment para eventos que não sejam experiment_exposure", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: "LANDING",
+      routerExperimentId: "acquisition_router_v1",
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
+    const { POST } = await import("@/app/api/experiments/track-landing/route");
+
+    await POST(request({ event: "cta_clicked" }));
+
+    expect(recordAcquisitionRouterAssignmentMock).not.toHaveBeenCalled();
   });
 });

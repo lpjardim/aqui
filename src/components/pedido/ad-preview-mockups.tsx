@@ -19,7 +19,7 @@ import { formatNumber } from "@/lib/format";
 import type { BillingFrequency } from "@/lib/pricing";
 import { NATIONAL_ZONE } from "@/lib/zones";
 
-type PreviewAsset = {
+export type PreviewAsset = {
   previewUrl: string;
   fileType: string;
 };
@@ -79,6 +79,53 @@ export function AdPreviewMockups({
       </p>
 
       <p className="mt-4 text-center text-[13px] font-medium">Está tudo pronto para avançar.</p>
+    </div>
+  );
+}
+
+/**
+ * Variante usada no ecrã de preview do `/diagnostico` — nesse ponto do
+ * funil ainda não há visualizações/pack escolhidos (isso só acontece no
+ * ecrã de recomendação, a seguir a este), por isso recebe uma legenda já
+ * pronta (`tagline`) em vez de `views`/`frequency`/`zone`. Reaproveita os
+ * mesmos mockups de Feed/Stories do checkout — nunca duplica o desenho do
+ * telefone/feed.
+ */
+export function DiagnosticAdPreviewMockups({
+  assets,
+  brandName,
+  tagline,
+}: {
+  assets: PreviewAsset[];
+  brandName?: string;
+  tagline: string;
+}) {
+  if (assets.length === 0) return null;
+
+  const [feedAsset, storyAsset = feedAsset] = assets;
+  const displayName = brandName?.trim() || "O seu negócio";
+
+  return (
+    <div className="mt-8 rounded-md border border-line bg-surface p-5 sm:p-7">
+      <h2 className="text-[17px] font-black leading-tight sm:text-[19px]">
+        É assim que o seu negócio pode começar a aparecer a mais pessoas da sua zona.
+      </h2>
+
+      <div className="mt-7 grid grid-cols-1 gap-8 sm:grid-cols-2">
+        <MockupSlot label="Feed">
+          <FeedMockup asset={feedAsset} brandName={displayName} />
+        </MockupSlot>
+        <MockupSlot label="Stories">
+          <StoryMockup asset={storyAsset} brandName={displayName} />
+        </MockupSlot>
+      </div>
+
+      <p className="mt-5 text-center text-[12px] text-muted">{tagline}</p>
+
+      <p className="mt-4 text-center text-[12px] text-muted">
+        Esta é uma pré-visualização. O formato pode adaptar-se ligeiramente ao Facebook, Instagram e
+        respetivos posicionamentos.
+      </p>
     </div>
   );
 }

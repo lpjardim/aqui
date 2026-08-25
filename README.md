@@ -289,7 +289,7 @@ dados pessoais para a Meta. Pode ser reaberto em `/cookies` ("Gerir preferência
 
 - `_fbp`/`_fbc` reais só existem depois de consentimento — geridos pelo próprio script do
   Pixel (`fbevents.js`), nunca inventados por nós.
-- Se aparecer `fbclid` na URL antes de haver consentimento, `middleware.ts` guarda-o já no
+- Se aparecer `fbclid` na URL antes de haver consentimento, `proxy.ts` guarda-o já no
   formato oficial (`fb.1.<timestamp_ms>.<fbclid>`) numa cookie técnica `_fbc_pending`, para não
   se perder enquanto o visitante ainda não decidiu. `/api/meta/track` e `/api/pedido` usam-na
   como fallback quando `_fbc` ainda não existe.

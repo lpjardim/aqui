@@ -59,7 +59,7 @@ enum HeroEventType {
 }
 
 // Experimento A/B/C das 3 landing pages de entrada de campanhas
-// (`landing_page_v1`, ver `/go` em `middleware.ts`) — completamente
+// (`landing_page_v1`, ver `/go` em `proxy.ts`) — completamente
 // independente dos testes de Preços/Hero acima (cookie, tabela de eventos e
 // enums próprios). Ao contrário daqueles, a atribuição é por SESSÃO (cookie
 // sem `Max-Age`, nunca sticky para sempre) em vez de por 30 dias — ver
@@ -90,6 +90,81 @@ enum StripeCheckoutStatus {
   COMPLETED
 }
 
+// Funil `/diagnostico` (diagnóstico → resultado → preview → recomendação →
+// checkout) — completamente independente do A/B/C das landing pages
+// (`landing_page_v1`/`LandingVariant`): não é sorteado, é uma origem de
+// entrada própria, comparável às outras via `Order.funnelSource`. Ver
+// `src/lib/diagnostic-context.ts` e `src/lib/diagnostic/`.
+enum DiagnosticEventType {
+  HERO_VIEWED
+  HERO_CTA_CLICKED
+  STARTED
+  QUESTION_ANSWERED
+  COMPLETED
+  RESULT_VIEWED
+  PREVIEW_STARTED
+  PREVIEW_COMPLETED
+  RECOMMENDATION_VIEWED
+  RECOMMENDED_PLAN_CLICKED
+  CHECKOUT_STARTED
+  PAYMENT_CLICKED
+  STRIPE_SESSION_CREATED
+}
+
+// A/B/C test da headline+subtítulo do Hero de `/diagnostico`
+// (`diagnostic_hero_v1`) — isola só a mensagem do Hero; todo o resto do
+// funil (perguntas, scoring, resultado, preview, recomendação, checkout)
+// fica 100% inalterado e idêntico nas 3 variantes. Atribuição por SESSÃO
+// (cookie `diagnostic_hero_session`, sem `Max-Age`), nunca sticky para
+// sempre — mesmo princípio do `landing_page_v1`, mas simplificado (não há
+// redirect: a própria `/diagnostico` decide a variante no middleware). Ver
+// `src/lib/diagnostic-hero-constants.ts`.
+enum DiagnosticHeroVariant {
+  PAIN
+  WORD_OF_MOUTH
+  GROWTH
+}
+
+// Nível 1 do `acquisition_router_v1` (ver `src/lib/acquisition-router-constants.ts`)
+// — decide, na própria `/go`, entre a família das landing pages tradicionais
+// (`LandingVariant`, nível 2 já existente) e a família do funil interativo
+// `/diagnostico` (`DiagnosticHeroVariant`, nível 2 já existente, decidido
+// dentro de `/diagnostico`, nunca duplicado aqui). Nenhuma randomização nova
+// é introduzida a este nível 2 — só a escolha de qual família de experimento
+// nível 2 corre.
+enum FunnelFamily {
+  LANDING
+  DIAGNOSTIC
+}
+
+enum AcquisitionRouterEventType {
+  ASSIGNMENT
+}
+
+// Exposição ao nível 1 do router (`acquisition_router_assignment`) — tabela
+// própria, só com o essencial para contar "visitantes únicos por família" de
+// forma robusta e versionada (`routerExperimentId`), independente de
+// qualquer mudança futura aos experimentos filhos (`LandingExperimentEvent`/
+// `DiagnosticEvent`, que continuam a ser a fonte de verdade para as métricas
+// financeiras de cada família — ver `src/lib/acquisition-router.ts`).
+model AcquisitionRouterEvent {
+  id                 String                     @id @default(cuid())
+  visitorId          String
+  sessionId          String
+  routerExperimentId String
+  funnelFamily       FunnelFamily
+  // Só preenchido quando `funnelFamily = LANDING` — a variante do hero do
+  // diagnóstico continua a viver exclusivamente em `DiagnosticEvent.heroVariant`.
+  landingVariant     LandingVariant?
+  eventType          AcquisitionRouterEventType
+  metadata           Json?
+  isDebug            Boolean                    @default(false)
+  createdAt          DateTime                   @default(now())
+
+  @@index([funnelFamily, eventType])
+  @@index([visitorId])
+}
+
 model User {
   id          String   @id @default(cuid())
   name        String
@@ -104,21 +179,21 @@ model User {
 }
 
 model Order {
-  id                      String      @id @default(cuid())
+  id                      String               @id @default(cuid())
   userId                  String
   visualizationsPurchased Int
-  visualizationsDelivered Int         @default(0)
+  visualizationsDelivered Int                  @default(0)
   zone                    String
   price                   Int
-  stripeSessionId         String?     @unique
+  stripeSessionId         String?              @unique
   stripePaymentIntentId   String?
-  status                  OrderStatus @default(PENDING_PAYMENT)
+  status                  OrderStatus          @default(PENDING_PAYMENT)
   // Estado técnico da Checkout Session (CREATED/EXPIRED/COMPLETED) — ver
   // `StripeCheckoutStatus`. Independente de `status`.
   stripeCheckoutStatus    StripeCheckoutStatus @default(CREATED)
   proofUrl                String?
-  createdAt               DateTime    @default(now())
-  updatedAt               DateTime    @updatedAt
+  createdAt               DateTime             @default(now())
+  updatedAt               DateTime             @updatedAt
 
   // Faturação — por defeito ONE_TIME cobre automaticamente encomendas
   // antigas, criadas antes de existir a opção mensal.
@@ -186,11 +261,11 @@ model Order {
   // servidores da Stripe, que o webhook nunca vê) — passou a ser guardado
   // porque é um dos parâmetros de maior impacto na Event Match Quality
   // (ver README > Meta Pixel + Conversions API > Event Match Quality).
-  metaPurchaseEventId String?
-  metaFbp             String?
-  metaFbc             String?
-  metaClientUserAgent String?
-  metaClientIp        String?
+  metaPurchaseEventId  String?
+  metaFbp              String?
+  metaFbc              String?
+  metaClientUserAgent  String?
+  metaClientIp         String?
   // Consentimento de marketing (cookie `aqui_consent`) no momento em que o
   // pedido foi criado. Sem consentimento, o webhook nunca envia Purchase/
   // Subscribe para a Meta para esta encomenda — nem no 1º pagamento, nem em
@@ -202,7 +277,7 @@ model Order {
   // Meta Ads para entregar as visualizações compradas. Estes aqui são o
   // "snapshot" first-touch dos parâmetros vindos do anúncio que trouxe o
   // visitante (UTMs + IDs de campanha/adset/anúncio Meta), capturados no
-  // `middleware.ts` (cookie `aqui_attribution`) e gravados aqui no momento em
+  // `proxy.ts` (cookie `aqui_attribution`) e gravados aqui no momento em
   // que a Order é criada — nunca lidos do body do pedido nem recalculados
   // depois. Todos `null` em encomendas orgânicas/antigas ou sem atribuição.
   utmSource             String?
@@ -224,15 +299,50 @@ model Order {
   // visita direta/orgânica NUNCA apaga estes campos — só uma nova visita paga
   // os substitui. Todos `null` em encomendas sem nenhum toque pago
   // identificável (incluindo todas as Orders anteriores a esta feature).
-  lastPaidUtmSource     String?
-  lastPaidUtmMedium     String?
-  lastPaidUtmCampaign   String?
-  lastPaidUtmContent    String?
-  lastPaidUtmTerm       String?
-  lastPaidPlacement     String?
-  lastPaidCampaignId    String?
-  lastPaidAdsetId       String?
-  lastPaidAdId          String?
+  lastPaidUtmSource   String?
+  lastPaidUtmMedium   String?
+  lastPaidUtmCampaign String?
+  lastPaidUtmContent  String?
+  lastPaidUtmTerm     String?
+  lastPaidPlacement   String?
+  lastPaidCampaignId  String?
+  lastPaidAdsetId     String?
+  lastPaidAdId        String?
+
+  // Funil `/diagnostico` — snapshot lido do cookie de handoff
+  // `diagnostic_handoff` no momento em que esta Order foi criada (nunca do
+  // body do pedido). Todos `null` para encomendas que não vieram do
+  // diagnóstico (comportamento/relatórios atuais ficam inalterados).
+  // `funnelSource` é o único campo genérico pensado para comparar as 4
+  // origens de entrada (`/go` normal/sales/blog vs. `/diagnostico`) — por
+  // agora só assume o valor `"diagnostic"` ou `null`.
+  funnelSource               String?
+  diagnosticId               String?
+  diagnosticVersion          String?
+  recommendationId           String?
+  recommendationModelVersion String?
+  diagnosticAnswers          Json?
+
+  // A/B/C test do Hero de `/diagnostico` (`diagnostic_hero_v1`) — variante
+  // da SESSÃO em que esta encomenda foi criada (lida da cookie
+  // `diagnostic_hero_session`, nunca do body do pedido). Só preenchido
+  // junto com os campos do diagnóstico acima (`null` para encomendas fora
+  // do funil). Tráfego forçado via `?hero=` fica marcado em
+  // `diagnosticHeroExperimentDebug`, nunca entra nos KPIs do teste.
+  diagnosticHeroVariant         DiagnosticHeroVariant?
+  diagnosticHeroExperimentDebug Boolean                @default(false)
+
+  // Nível 1 do `acquisition_router_v1` (ver `src/lib/acquisition-router-constants.ts`)
+  // — snapshot da família (`LANDING`/`DIAGNOSTIC`) decidida em `/go` no
+  // momento em que esta sessão começou (lida da cookie
+  // `acquisition_router_session`, nunca do body do pedido). `null` cobre
+  // encomendas fora do router (visita direta/orgânica a `/`, `/anunciar`,
+  // `/blog/...` ou `/diagnostico`, sem passar por `/go`) e encomendas
+  // anteriores a esta feature. Puramente aditivo — nunca substitui nem
+  // reescreve `landingVariant`/`diagnosticHeroVariant`/attribution acima.
+  funnelFamily                  FunnelFamily?
+  acquisitionRouterExperimentId String?
+  acquisitionRouterDebug        Boolean       @default(false)
 
   // --- Histórico anterior aos DeliveryCycle — mantidos apenas para não
   // perder dados de encomendas antigas (criadas antes desta migration). O
@@ -257,6 +367,10 @@ model Order {
   @@index([heroVariant])
   @@index([landingVariant])
   @@index([visitorId])
+  @@index([funnelSource])
+  @@index([diagnosticId])
+  @@index([diagnosticHeroVariant])
+  @@index([funnelFamily])
 }
 
 /**
@@ -400,6 +514,41 @@ model LandingExperimentEvent {
   @@index([variant, eventType])
   @@index([visitorId])
   @@index([experimentVisitId])
+}
+
+/**
+ * Eventos do funil `/diagnostico` — tabela própria (nunca partilhada com
+ * `ExperimentEvent`/`HeroExperimentEvent`/`LandingExperimentEvent`), porque
+ * este funil não faz parte do sorteio A/B/C das landing pages: é uma origem
+ * de entrada determinística e independente. `diagnosticId` identifica uma
+ * "corrida" completa do diagnóstico (gerado no cliente ao chegar ao Hero,
+ * persistido em `sessionStorage` — ver `src/lib/diagnostic/session.ts`),
+ * necessário porque, ao contrário do `landing_page_v1`, aqui não há
+ * atribuição de variante por sessão do browser. `visitorId`/`sessionId`
+ * continuam a vir sempre das cookies globais (`aqui_vid`/`aqui_sid`),
+ * partilhadas com todos os outros experimentos.
+ */
+model DiagnosticEvent {
+  id           String                 @id @default(cuid())
+  visitorId    String
+  sessionId    String
+  diagnosticId String
+  eventType    DiagnosticEventType
+  // Variante do A/B/C test do Hero ativa nesta sessão (ver
+  // `DiagnosticHeroVariant`) — gravada em TODOS os eventos desta corrida
+  // (não só `HERO_VIEWED`/`HERO_CTA_CLICKED`/`STARTED`), para permitir
+  // agregar diretamente por variante em cada etapa do funil (completions,
+  // previews, checkouts) sem precisar de um JOIN separado. `null` só para
+  // eventos anteriores a esta feature.
+  heroVariant  DiagnosticHeroVariant?
+  metadata     Json?
+  isDebug      Boolean                @default(false)
+  createdAt    DateTime               @default(now())
+
+  @@index([eventType])
+  @@index([visitorId])
+  @@index([diagnosticId])
+  @@index([heroVariant, eventType])
 }
 
 model LoginToken {

@@ -10,7 +10,7 @@ import {
 export type { AdAttribution };
 
 /**
- * Lê a atribuição FIRST-TOUCH já capturada pelo `middleware.ts` (cookie
+ * Lê a atribuição FIRST-TOUCH já capturada pelo `proxy.ts` (cookie
  * `aqui_attribution`) — é a ÚNICA fonte de verdade para "de onde veio o
  * cliente da primeira vez", nunca um valor vindo do body de um pedido. Mesmo
  * padrão de `getPricingContext()`/`getHeroContext()` em

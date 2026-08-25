@@ -9,7 +9,19 @@ import { sendLoginEmail } from "@/lib/email";
 import { getPricingContext, recordExperimentEvent } from "@/lib/experiments";
 import { getHeroContext, recordHeroExperimentEvent } from "@/lib/hero-experiment";
 import { getLandingContext, recordLandingExperimentEvent } from "@/lib/landing-experiment";
-import { ExperimentEventType, HeroEventType, LandingEventType } from "@/generated/prisma/enums";
+import {
+  getDiagnosticHandoff,
+  getDiagnosticVisitorContext,
+  recordDiagnosticEvent,
+} from "@/lib/diagnostic-context";
+import { getAcquisitionRouterContext } from "@/lib/acquisition-router";
+import {
+  ExperimentEventType,
+  HeroEventType,
+  LandingEventType,
+  DiagnosticEventType,
+} from "@/generated/prisma/enums";
+import type { Prisma } from "@/generated/prisma/client";
 import { hasMarketingConsent } from "@/lib/consent";
 import { clientIp, readCookie } from "@/lib/meta/request-context";
 import { getPackByVisualizations } from "@/lib/packs";
@@ -145,7 +157,7 @@ export async function POST(request: Request) {
     const metaClientIp = metaMarketingConsent ? clientIp(request) : null;
 
     // Atribuição de marketing (UTMs + IDs de campanha/adset/anúncio) — lida
-    // sempre das cookies já capturadas pelo `middleware.ts`, nunca do body do
+    // sempre das cookies já capturadas pelo `proxy.ts`, nunca do body do
     // pedido. Independente de consentimento de marketing: não são
     // identificadores de terceiros, só rótulos de campanha (ver
     // `src/lib/attribution-constants.ts`). Dois snapshots independentes e
@@ -153,6 +165,19 @@ export async function POST(request: Request) {
     // (última campanha paga antes desta compra).
     const attribution = await getStoredAttribution();
     const lastPaidTouch = await getLastPaidTouchAttribution();
+
+    // Funil `/diagnostico` — `null` para todo o pedido que não veio de lá
+    // (lido sempre da cookie `diagnostic_handoff`, nunca do body do
+    // pedido). Comportamento/relatórios do checkout normal ficam
+    // inalterados nesse caso.
+    const diagnosticHandoff = await getDiagnosticHandoff();
+    const diagnosticVisitorContext = await getDiagnosticVisitorContext();
+
+    // Nível 1 do router `acquisition_router_v1` — `funnelFamily: null` cobre
+    // encomendas fora do router (visita direta/orgânica, sem passar por
+    // `/go`). Nunca do body do pedido, sempre da cookie
+    // `acquisition_router_session` (ver `getAcquisitionRouterContext`).
+    const routerContext = await getAcquisitionRouterContext();
 
     const user = await prisma.user.upsert({
       where: { email },
@@ -190,6 +215,16 @@ export async function POST(request: Request) {
         landingExperimentDebug: landingContext.isDebug,
         landingSessionId: landingContext.sessionId,
         landingExperimentVisitId: landingContext.experimentVisitId,
+        // Nível 1 do `acquisition_router_v1` — puramente aditivo, nunca
+        // substitui os campos `landing*`/`diagnostic*` acima. `null`/`false`
+        // para qualquer encomenda que não passou por `/go`.
+        funnelFamily: routerContext.funnelFamily,
+        acquisitionRouterExperimentId: routerContext.routerExperimentId,
+        acquisitionRouterDebug: routerContext.funnelFamily
+          ? routerContext.funnelFamily === "LANDING"
+            ? landingContext.isDebug
+            : diagnosticVisitorContext.isDebug
+          : false,
         metaPurchaseEventId,
         metaMarketingConsent,
         metaFbp,
@@ -198,6 +233,24 @@ export async function POST(request: Request) {
         metaClientIp,
         ...attribution,
         ...toLastPaidTouchOrderFields(lastPaidTouch),
+        ...(diagnosticHandoff
+          ? {
+              funnelSource: "diagnostic",
+              diagnosticId: diagnosticHandoff.diagnosticId,
+              diagnosticVersion: diagnosticHandoff.diagnosticVersion,
+              recommendationId: diagnosticHandoff.recommendationId,
+              recommendationModelVersion: diagnosticHandoff.recommendationModelVersion,
+              diagnosticAnswers: diagnosticHandoff.answers as Prisma.InputJsonValue,
+              // A/B/C test do Hero de `/diagnostico` (`diagnostic_hero_v1`) —
+              // variante da sessão em que este diagnóstico começou (lida da
+              // cookie `diagnostic_hero_session` via `getDiagnosticVisitorContext`,
+              // nunca do body do pedido), para permitir atribuir starts,
+              // completions, previews, checkouts, compras e receita a cada
+              // variante até à Order final.
+              diagnosticHeroVariant: diagnosticVisitorContext.heroVariant,
+              diagnosticHeroExperimentDebug: diagnosticVisitorContext.isDebug,
+            }
+          : {}),
         assets: {
           create: input.assets.map((asset) => ({
             fileUrl: asset.url,
@@ -353,6 +406,26 @@ export async function POST(request: Request) {
           console.error("[pedido] falha ao registar landing stripe_session_created:", error);
         }),
       );
+      // Mesmo evento para o funil `/diagnostico` — só quando este pedido
+      // realmente veio de lá (`diagnosticHandoff` não nulo).
+      if (diagnosticHandoff) {
+        after(() =>
+          recordDiagnosticEvent({
+            eventType: DiagnosticEventType.STRIPE_SESSION_CREATED,
+            diagnosticId: diagnosticHandoff.diagnosticId,
+            context: diagnosticVisitorContext,
+            metadata: {
+              orderId: order.id,
+              packId: getPackByVisualizations(views)?.id ?? null,
+              billingFrequency: input.billingFrequency,
+              price,
+              recommendationId: diagnosticHandoff.recommendationId,
+            },
+          }).catch((error) => {
+            console.error("[pedido] falha ao registar diagnostic stripe_session_created:", error);
+          }),
+        );
+      }
     }
 
     return NextResponse.json({ url: session.url });

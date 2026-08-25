@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AdAttribution } from "@/lib/attribution-constants";
 import { EMPTY_ATTRIBUTION } from "@/lib/attribution-constants";
+import type { DiagnosticHandoff } from "@/lib/diagnostic/handoff";
 
 const {
   afterCallbacks,
@@ -8,6 +9,10 @@ const {
   getLastPaidTouchAttributionMock,
   checkoutSessionsCreateMock,
   isStripeConfiguredMock,
+  getDiagnosticHandoffMock,
+  recordDiagnosticEventMock,
+  getDiagnosticVisitorContextMock,
+  getAcquisitionRouterContextMock,
 } = vi.hoisted(() => ({
   afterCallbacks: [] as Array<Promise<unknown>>,
   getStoredAttributionMock: vi.fn<() => Promise<AdAttribution>>(),
@@ -19,6 +24,10 @@ const {
     }),
   ),
   isStripeConfiguredMock: vi.fn(() => false),
+  getDiagnosticHandoffMock: vi.fn<() => Promise<DiagnosticHandoff | null>>(),
+  recordDiagnosticEventMock: vi.fn(async () => {}),
+  getDiagnosticVisitorContextMock: vi.fn(),
+  getAcquisitionRouterContextMock: vi.fn(),
 }));
 
 vi.mock("@/lib/attribution", async (importOriginal) => {
@@ -68,6 +77,16 @@ vi.mock("@/lib/landing-experiment", () => ({
 
 vi.mock("@/lib/consent", () => ({
   hasMarketingConsent: vi.fn(async () => false),
+}));
+
+vi.mock("@/lib/diagnostic-context", () => ({
+  getDiagnosticHandoff: getDiagnosticHandoffMock,
+  getDiagnosticVisitorContext: getDiagnosticVisitorContextMock,
+  recordDiagnosticEvent: recordDiagnosticEventMock,
+}));
+
+vi.mock("@/lib/acquisition-router", () => ({
+  getAcquisitionRouterContext: getAcquisitionRouterContextMock,
 }));
 
 vi.mock("@/lib/packs", () => ({
@@ -165,6 +184,20 @@ describe("POST /api/pedido — atribuição de marketing", () => {
     isStripeConfiguredMock.mockReturnValue(false);
     getStoredAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
     getLastPaidTouchAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    getDiagnosticVisitorContextMock.mockResolvedValue({
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      heroVariant: "WORD_OF_MOUTH",
+      isDebug: false,
+    });
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: null,
+      routerExperimentId: null,
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
     vi.stubEnv("NODE_ENV", "test");
   });
 
@@ -258,6 +291,20 @@ describe("POST /api/pedido — last paid touch", () => {
     isStripeConfiguredMock.mockReturnValue(false);
     getStoredAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
     getLastPaidTouchAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    getDiagnosticVisitorContextMock.mockResolvedValue({
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      heroVariant: "WORD_OF_MOUTH",
+      isDebug: false,
+    });
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: null,
+      routerExperimentId: null,
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
     vi.stubEnv("NODE_ENV", "test");
   });
 
@@ -400,5 +447,249 @@ describe("POST /api/pedido — last paid touch", () => {
 
     const call = checkoutSessionsCreateMock.mock.calls[0]?.[0];
     expect(call?.metadata).toEqual({ orderId: "order_1" });
+  });
+});
+
+const DIAGNOSTIC_HANDOFF: DiagnosticHandoff = {
+  diagnosticId: "diag_1",
+  diagnosticVersion: "v1",
+  recommendationId: "p20k_MONTHLY_v1",
+  recommendationModelVersion: "v1",
+  answers: {
+    primaryAcquisitionChannel: "word_of_mouth",
+    predictableReach: "no",
+    localAwareness: "very_few",
+    businessGoal: "more_customers",
+    urgency: "now",
+    targetLocation: "Porto",
+  },
+  zone: "Porto",
+  packId: "p20k",
+  billingFrequency: "MONTHLY",
+  assets: [{ url: "https://files.example/preview.png", fileType: "image/png" }],
+};
+
+describe("POST /api/pedido — handoff do funil /diagnostico", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    afterCallbacks.length = 0;
+    lastOrderCreateData = null;
+    isStripeConfiguredMock.mockReturnValue(false);
+    getStoredAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getLastPaidTouchAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    getDiagnosticVisitorContextMock.mockResolvedValue({
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      heroVariant: "WORD_OF_MOUTH",
+      isDebug: false,
+    });
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: null,
+      routerExperimentId: null,
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  it("sem cookie de handoff, a Order fica sem nenhum campo do diagnóstico (checkout normal inalterado)", async () => {
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData?.funnelSource).toBeUndefined();
+    expect(lastOrderCreateData?.diagnosticId).toBeUndefined();
+  });
+
+  it("com cookie de handoff, grava funnelSource/diagnosticId/recommendation*/diagnosticAnswers na Order", async () => {
+    getDiagnosticHandoffMock.mockResolvedValue(DIAGNOSTIC_HANDOFF);
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData).toMatchObject({
+      funnelSource: "diagnostic",
+      diagnosticId: "diag_1",
+      diagnosticVersion: "v1",
+      recommendationId: "p20k_MONTHLY_v1",
+      recommendationModelVersion: "v1",
+      diagnosticAnswers: DIAGNOSTIC_HANDOFF.answers,
+    });
+  });
+
+  it("grava diagnosticHeroVariant/diagnosticHeroExperimentDebug na Order (lidos do contexto, nunca do body)", async () => {
+    getDiagnosticHandoffMock.mockResolvedValue(DIAGNOSTIC_HANDOFF);
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData).toMatchObject({
+      diagnosticHeroVariant: "WORD_OF_MOUTH",
+      diagnosticHeroExperimentDebug: false,
+    });
+  });
+
+  it("sem cookie de handoff, a Order fica sem diagnosticHeroVariant (checkout normal inalterado)", async () => {
+    const { POST } = await import("@/app/api/pedido/route");
+
+    await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(lastOrderCreateData?.diagnosticHeroVariant).toBeUndefined();
+    expect(lastOrderCreateData?.diagnosticHeroExperimentDebug).toBeUndefined();
+  });
+
+  it("nunca lê o diagnóstico do body do pedido — só da cookie via getDiagnosticHandoff", async () => {
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    const { POST } = await import("@/app/api/pedido/route");
+
+    await POST(
+      pedidoRequest(
+        buildOrderInput({ funnelSource: "diagnostic", diagnosticId: "forjado-pelo-cliente" }),
+      ),
+    );
+    await flushAfterCallbacks();
+
+    expect(lastOrderCreateData?.funnelSource).toBeUndefined();
+    expect(lastOrderCreateData?.diagnosticId).toBeUndefined();
+  });
+
+  it("regista stripe_session_created do diagnóstico quando a sessão Stripe é criada com sucesso", async () => {
+    isStripeConfiguredMock.mockReturnValue(true);
+    getDiagnosticHandoffMock.mockResolvedValue(DIAGNOSTIC_HANDOFF);
+    const { POST } = await import("@/app/api/pedido/route");
+
+    await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(recordDiagnosticEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        diagnosticId: "diag_1",
+        metadata: expect.objectContaining({ orderId: "order_1" }),
+      }),
+    );
+  });
+
+  it("nunca regista stripe_session_created do diagnóstico quando não há handoff", async () => {
+    isStripeConfiguredMock.mockReturnValue(true);
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    const { POST } = await import("@/app/api/pedido/route");
+
+    await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(recordDiagnosticEventMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /api/pedido — nível 1 do router (acquisition_router_v1)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    afterCallbacks.length = 0;
+    lastOrderCreateData = null;
+    isStripeConfiguredMock.mockReturnValue(false);
+    getStoredAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getLastPaidTouchAttributionMock.mockResolvedValue(EMPTY_ATTRIBUTION);
+    getDiagnosticHandoffMock.mockResolvedValue(null);
+    getDiagnosticVisitorContextMock.mockResolvedValue({
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      heroVariant: "WORD_OF_MOUTH",
+      isDebug: false,
+    });
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: null,
+      routerExperimentId: null,
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: false,
+    });
+    vi.stubEnv("NODE_ENV", "test");
+  });
+
+  it("sem sessão do router, a Order fica com funnelFamily/acquisitionRouterExperimentId null e acquisitionRouterDebug false", async () => {
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData).toMatchObject({
+      funnelFamily: null,
+      acquisitionRouterExperimentId: null,
+      acquisitionRouterDebug: false,
+    });
+  });
+
+  it("com sessão do router em LANDING, grava funnelFamily/acquisitionRouterExperimentId e usa o isDebug da landing", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: "LANDING",
+      routerExperimentId: "acquisition_router_v1",
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: true,
+    });
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData).toMatchObject({
+      funnelFamily: "LANDING",
+      acquisitionRouterExperimentId: "acquisition_router_v1",
+      // `landingContext.isDebug` vem do mock de `getLandingContext` acima,
+      // que devolve `isDebug: false` por defeito neste ficheiro.
+      acquisitionRouterDebug: false,
+    });
+  });
+
+  it("com sessão do router em DIAGNOSTIC, grava funnelFamily/acquisitionRouterExperimentId e usa o isDebug do diagnóstico", async () => {
+    getAcquisitionRouterContextMock.mockResolvedValue({
+      funnelFamily: "DIAGNOSTIC",
+      routerExperimentId: "acquisition_router_v1",
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      isDebug: true,
+    });
+    getDiagnosticVisitorContextMock.mockResolvedValue({
+      visitorId: "vid_1",
+      sessionId: "sid_1",
+      heroVariant: "GROWTH",
+      isDebug: true,
+    });
+    const { POST } = await import("@/app/api/pedido/route");
+
+    const response = await POST(pedidoRequest(buildOrderInput()));
+    await flushAfterCallbacks();
+
+    expect(response.status).toBe(200);
+    expect(lastOrderCreateData).toMatchObject({
+      funnelFamily: "DIAGNOSTIC",
+      acquisitionRouterExperimentId: "acquisition_router_v1",
+      acquisitionRouterDebug: true,
+    });
+  });
+
+  it("nunca lê funnelFamily/routerExperimentId do body do pedido — sempre da cookie via getAcquisitionRouterContext", async () => {
+    const { POST } = await import("@/app/api/pedido/route");
+
+    await POST(
+      pedidoRequest(
+        buildOrderInput({ funnelFamily: "DIAGNOSTIC", acquisitionRouterExperimentId: "forjado" }),
+      ),
+    );
+    await flushAfterCallbacks();
+
+    expect(lastOrderCreateData?.funnelFamily).toBeNull();
+    expect(lastOrderCreateData?.acquisitionRouterExperimentId).toBeNull();
   });
 });

@@ -1,7 +1,7 @@
 /**
  * Experimento A/B/C das 3 landing pages de entrada de campanhas
  * (`landing_page_v1`) — só constantes/tipos puros e funções sem `next/headers`,
- * para poderem ser usados tanto pelo `middleware.ts` (Edge) como pelo resto do
+ * para poderem ser usados tanto pelo `proxy.ts` (Edge) como pelo resto do
  * server (Node), tal como `src/lib/attribution-constants.ts`.
  *
  * Ao contrário dos testes de Preços/Hero (`pricing_variant`/`hero_variant`,
@@ -63,19 +63,6 @@ export function parseForcedLandingVariant(value: string | null): LandingVariantV
 }
 
 /**
- * Randomização probabilística simples (sem estado partilhado, sem
- * round-robin) — funciona de forma idêntica em qualquer instância
- * serverless/edge e converge para 33/33/33 com volume. `r < 1/3` → normal,
- * `r < 2/3` → sales, resto → blog: dá exatamente 33,33% / 33,33% / 33,34%.
- */
-export function randomLandingVariant(): LandingVariantValue {
-  const r = Math.random();
-  if (r < 1 / 3) return "NORMAL";
-  if (r < 2 / 3) return "SALES";
-  return "BLOG";
-}
-
-/**
  * Deteção simples de bots/crawlers/previews — não é um sistema anti-bot
  * complexo, só evita que o tráfego mais óbvio (crawlers de motores de busca,
  * link-preview de redes sociais, monitorização de uptime, ferramentas de
@@ -99,7 +86,7 @@ export function isLikelyBot(userAgent: string | null): boolean {
 export type LandingSessionState = {
   variant: LandingVariantValue;
   /** ID específico desta entrada no experimento (um por hit em `/go`, mesmo
-   * que a variante da sessão se mantenha — ver `middleware.ts`). */
+   * que a variante da sessão se mantenha — ver `proxy.ts`). */
   visitId: string;
   isDebug: boolean;
   attribution: AdAttribution;

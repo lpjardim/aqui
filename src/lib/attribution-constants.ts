@@ -3,7 +3,7 @@
  * Integração Meta Marketing API (`src/lib/meta.ts`), que é a campanha que a
  * PRÓPRIA Aqui. cria/gere na Meta Ads para entregar as visualizações
  * compradas. Isto aqui é o "snapshot" dos parâmetros vindos do anúncio que
- * trouxe o visitante — capturado no `middleware.ts`, lido em
+ * trouxe o visitante — capturado no `proxy.ts`, lido em
  * `src/lib/attribution.ts`, gravado na Order em `/api/pedido`.
  *
  * Duas cookies independentes, para dois propósitos de análise distintos:
@@ -71,7 +71,7 @@ function truncate(value: string): string {
 }
 
 /**
- * Lê os 9 parâmetros de um `URLSearchParams` — usado só pelo `middleware.ts`
+ * Lê os 9 parâmetros de um `URLSearchParams` — usado só pelo `proxy.ts`
  * para decidir se há alguma atribuição nesta visita (e o quê guardar).
  * Devolve `null` se nenhum dos 9 parâmetros estiver presente.
  */

@@ -32,7 +32,7 @@ export type LandingContext = {
 };
 
 /**
- * Lê a variante/visitante/sessão já atribuídos pelo `middleware.ts` (cookies
+ * Lê a variante/visitante/sessão já atribuídos pelo `proxy.ts` (cookies
  * `landing_session`/`aqui_vid`/`aqui_sid`). Espelha `getPricingContext`/
  * `getHeroContext`, mas com uma diferença importante: aqui `variant` pode ser
  * `null` — só existe uma variante ativa quando esta sessão passou por `/go`

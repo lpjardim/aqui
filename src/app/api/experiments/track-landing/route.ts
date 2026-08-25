@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getLandingContext, recordLandingExperimentEvent } from "@/lib/landing-experiment";
 import { LANDING_EXPERIMENT_ID } from "@/lib/landing-experiment-constants";
+import { getAcquisitionRouterContext, recordAcquisitionRouterAssignment } from "@/lib/acquisition-router";
 import { LandingEventType } from "@/generated/prisma/enums";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
 
   // `experiment_exposure` carrega também a atribuição capturada em `/go`
   // (secção 6 do pedido) — nunca confiada ao cliente, vem sempre do snapshot
-  // já guardado na cookie `landing_session` pelo `middleware.ts`.
+  // já guardado na cookie `landing_session` pelo `proxy.ts`.
   const metadata =
     eventType === LandingEventType.EXPOSURE && context.session
       ? {
@@ -64,6 +65,23 @@ export async function POST(request: Request) {
       : baseMetadata;
 
   await recordLandingExperimentEvent({ eventType, context, metadata });
+
+  // Mirror do nível 1 do router (`acquisition_router_v1`) — só grava quando
+  // esta sessão passou por `/go` E calhou na família LANDING (visitas
+  // diretas à home/`/anunciar`/blog sem passar por `/go` nunca geram este
+  // evento, mantendo o nível 1 limpo). Reaproveita este ponto de exposição
+  // já existente e já disparado exatamente uma vez por sessão — nunca
+  // precisa de uma rota de API própria.
+  if (eventType === LandingEventType.EXPOSURE) {
+    const routerContext = await getAcquisitionRouterContext();
+    if (routerContext.funnelFamily === "LANDING") {
+      await recordAcquisitionRouterAssignment({
+        routerContext,
+        landingVariant: context.variant,
+        metadata,
+      });
+    }
+  }
 
   return NextResponse.json({ ok: true });
 }

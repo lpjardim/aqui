@@ -22,7 +22,7 @@ export type HeroContext = {
 };
 
 /**
- * Lê a variante/visitante/debug já atribuídos pelo `middleware.ts` (cookies
+ * Lê a variante/visitante/debug já atribuídos pelo `proxy.ts` (cookies
  * `hero_variant`/`aqui_vid`/`hero_debug`). Espelha `getPricingContext` de
  * `src/lib/experiments.ts`, mas para o teste independente da headline do
  * Hero — nunca partilha cookie de variante nem tabela de eventos com o teste

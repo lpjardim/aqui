@@ -28,6 +28,9 @@ import { track } from "@/lib/analytics";
 import { trackExperimentEvent } from "@/lib/experiment-tracking";
 import { trackHeroExperimentEvent } from "@/lib/hero-experiment-tracking";
 import { trackLandingExperimentEvent } from "@/lib/landing-experiment-tracking";
+import { trackDiagnosticEvent } from "@/lib/diagnostic-tracking";
+import { isPrefilledFromDiagnostic } from "@/lib/diagnostic/order-form-prefill";
+import { DIAGNOSTIC_HANDOFF_COOKIE } from "@/lib/diagnostic/handoff";
 import { useFireMetaEventOnConsent } from "@/lib/meta/use-fire-meta-event";
 import { AdPreviewMockups } from "@/components/pedido/ad-preview-mockups";
 
@@ -56,7 +59,10 @@ type AssetStatus = "uploading" | "done" | "error";
 
 type AssetItem = {
   id: string;
-  file: File;
+  /** Ausente para ficheiros vindos já prontos do diagnóstico (ver
+   * `initialAssets`) — nesse caso `previewUrl` já é o URL remoto real, não
+   * um `blob:` local, e nunca há upload nem `URL.revokeObjectURL` a fazer. */
+  file?: File;
   previewUrl: string;
   fileType: string;
   status: AssetStatus;
@@ -65,6 +71,19 @@ type AssetItem = {
   url?: string;
   pathname?: string;
 };
+
+function assetItemsFromHandoff(
+  assets: { url: string; fileType: string }[],
+): AssetItem[] {
+  return assets.map((asset, index) => ({
+    id: `diagnostic-${index}-${asset.url}`,
+    previewUrl: asset.url,
+    fileType: asset.fileType,
+    status: "done",
+    progress: 100,
+    url: asset.url,
+  }));
+}
 
 const STEP_TITLES = [
   "Onde quer aparecer?",
@@ -122,6 +141,9 @@ export function OrderForm({
   initialCustom,
   initialFrequency = null,
   initialCancelled = false,
+  initialZone = null,
+  initialAssets = [],
+  diagnosticId = null,
 }: {
   initialViews: number | null;
   initialCustom: boolean;
@@ -129,10 +151,35 @@ export function OrderForm({
   initialFrequency?: BillingFrequency | null;
   /** Voltou de `?cancelado=1` (cancel_url da Stripe) — mostra aviso, não um erro. */
   initialCancelled?: boolean;
+  /** Vindo do handoff `/diagnostico` (ver `pedido/page.tsx`) — `null` para o
+   * checkout normal, comportamento 100% inalterado nesse caso. */
+  initialZone?: string | null;
+  /** Ficheiros já enviados no ecrã de preview do diagnóstico — nunca
+   * pedidos de novo. */
+  initialAssets?: { url: string; fileType: string }[];
+  /** Presente só quando este pedido veio do funil `/diagnostico` — usado
+   * exclusivamente para o tracking próprio desse funil (nunca altera a
+   * lógica do checkout em si). */
+  diagnosticId?: string | null;
 }) {
-  const [step, setStep] = useState(1);
-  const [zone, setZone] = useState("");
-  const [assets, setAssets] = useState<AssetItem[]>([]);
+  // Passo inicial avança automaticamente para os dados de contacto só
+  // quando o diagnóstico já trouxe tudo o que os passos 1-4 pediriam
+  // (zona + pack/volume + frequência + pelo menos 1 ficheiro) — sem
+  // diagnóstico, ou com dados incompletos, o comportamento é sempre o
+  // mesmo de sempre: começar no passo 1. O resumo mostrado continua
+  // totalmente editável (o botão "Voltar" já permite voltar a qualquer
+  // passo anterior).
+  const prefilledFromDiagnostic = isPrefilledFromDiagnostic({
+    diagnosticId,
+    initialZone,
+    initialViews,
+    initialFrequency,
+    initialAssetsCount: initialAssets.length,
+  });
+
+  const [step, setStep] = useState(prefilledFromDiagnostic ? 5 : 1);
+  const [zone, setZone] = useState(initialZone ?? "");
+  const [assets, setAssets] = useState<AssetItem[]>(() => assetItemsFromHandoff(initialAssets));
   const [views, setViews] = useState<number | null>(initialViews);
   const [customVolume, setCustomVolume] = useState(initialCustom);
   const [frequency, setFrequency] = useState<BillingFrequency | null>(initialFrequency);
@@ -165,6 +212,17 @@ export function OrderForm({
       custom: initialCustom,
       frequency: initialFrequency,
     });
+    // Idem para o funil `/diagnostico` — só dispara quando este pedido
+    // realmente veio de lá (`trackDiagnosticEvent` já é no-op sem
+    // `diagnosticId`, mas o `if` evita gerar o payload sem necessidade).
+    if (diagnosticId) {
+      trackDiagnosticEvent("checkout_started", diagnosticId, {
+        views: initialViews,
+        custom: initialCustom,
+        frequency: initialFrequency,
+        prefilled: prefilledFromDiagnostic,
+      });
+    }
     // Só reportar o checkout iniciado nesta chegada ao formulário, não em cada re-render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -190,6 +248,7 @@ export function OrderForm({
   );
 
   const runUpload = useCallback((item: AssetItem, position: number) => {
+    if (!item.file) return;
     const controller = new AbortController();
     abortControllers.current.set(item.id, controller);
 
@@ -282,8 +341,10 @@ export function OrderForm({
     abortControllers.current.delete(id);
 
     setAssets((current) => {
+      // Só revoga `blob:` URLs criados localmente por `URL.createObjectURL`
+      // — os que vêm já prontos do diagnóstico são URLs remotos reais.
       const target = current.find((asset) => asset.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
+      if (target?.file) URL.revokeObjectURL(target.previewUrl);
       return current.filter((asset) => asset.id !== id);
     });
   }
@@ -359,6 +420,14 @@ export function OrderForm({
       price: totalPrice,
       packId: getPackByVisualizations(views)?.id ?? null,
     });
+    if (diagnosticId) {
+      trackDiagnosticEvent("payment_clicked", diagnosticId, {
+        views,
+        billingFrequency: frequency,
+        price: totalPrice,
+        packId: getPackByVisualizations(views)?.id ?? null,
+      });
+    }
 
     setSubmitting(true);
     setError(null);
@@ -387,6 +456,15 @@ export function OrderForm({
         throw new Error(data.error ?? "Não foi possível continuar para o pagamento.");
       }
 
+      // A cookie de handoff só serve para atravessar o redirect
+      // `/diagnostico` → `/pedido` e ser lida aqui pelo `/api/pedido` (ver
+      // `route.ts`) — sem isto, ficaria válida até 1h e voltaria a
+      // pré-preencher zona/ficheiros numa visita normal e não relacionada
+      // a `/pedido` dentro desse período.
+      if (diagnosticId) {
+        document.cookie = `${DIAGNOSTIC_HANDOFF_COOKIE}=; path=/; max-age=0; samesite=lax`;
+      }
+
       window.location.href = data.url;
     } catch (submitError) {
       setError(
@@ -403,6 +481,19 @@ export function OrderForm({
           <p className="text-[14px] font-semibold">Pagamento não concluído</p>
           <p className="mt-1 text-[13px] text-muted">
             A sua campanha ainda não foi ativada. Pode tentar novamente o pagamento.
+          </p>
+        </div>
+      )}
+
+      {prefilledFromDiagnostic && step >= 5 && (
+        <div className="mb-6 rounded-md border border-line bg-surface px-4 py-3">
+          <p className="text-[14px] font-semibold">Dados vindos do seu diagnóstico</p>
+          <p className="mt-1 text-[13px] text-muted">
+            Já preenchemos a zona, o volume, a frequência e o ficheiro que enviou.{" "}
+            <button type="button" onClick={() => setStep(1)} className="underline">
+              Rever tudo desde o início
+            </button>
+            .
           </p>
         </div>
       )}
@@ -484,7 +575,7 @@ export function OrderForm({
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={asset.previewUrl}
-                      alt={asset.file.name}
+                      alt={asset.file?.name ?? ""}
                       className="size-full object-cover"
                     />
                   )}
@@ -521,7 +612,7 @@ export function OrderForm({
                   <button
                     type="button"
                     onClick={() => removeAsset(asset.id)}
-                    aria-label={`Remover ${asset.file.name}`}
+                    aria-label={`Remover ${asset.file?.name ?? "ficheiro"}`}
                     className="absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-full bg-ink/80 text-white transition-colors hover:bg-ink"
                   >
                     <Close className="size-3" />
